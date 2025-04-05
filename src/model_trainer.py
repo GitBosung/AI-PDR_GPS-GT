@@ -6,6 +6,7 @@ from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import os
 from datetime import datetime
+import pandas as pd
 
 class ModelTrainer:
     """
@@ -41,26 +42,87 @@ class ModelTrainer:
         self.model.compile(optimizer='adam', loss='mse', metrics=['mae'])
         return self.model
 
+    def analyze_scaling(self, X, X_scaled):
+        """
+        스케일링 전/후의 데이터를 분석하고 시각화합니다.
+        
+        Args:
+            X: 원본 데이터
+            X_scaled: 스케일링된 데이터
+        """
+        # 각 센서별 축 이름
+        axes = ['x', 'y', 'z']
+        sensors = {
+            'Accelerometer': (0, 3),
+            'Gyroscope': (3, 6),
+            'Orientation': (6, 9)
+        }
+        
+        # 통계 정보 출력
+        print("\n=== 스케일링 전/후 통계 정보 ===")
+        for sensor_name, (start, end) in sensors.items():
+            print(f"\n{sensor_name}:")
+            for i, axis in enumerate(axes):
+                original = X[:, :, start+i].flatten()
+                scaled = X_scaled[:, :, start+i].flatten()
+                
+                stats = pd.DataFrame({
+                    'Original': {
+                        'Min': np.min(original),
+                        'Max': np.max(original),
+                        'Mean': np.mean(original),
+                        'Std': np.std(original)
+                    },
+                    'Scaled': {
+                        'Min': np.min(scaled),
+                        'Max': np.max(scaled),
+                        'Mean': np.mean(scaled),
+                        'Std': np.std(scaled)
+                    }
+                })
+                print(f"\n{axis}-axis:")
+                print(stats)
+        
+        # 시각화
+        plt.figure(figsize=(15, 10))
+        
+        for i, (sensor_name, (start, end)) in enumerate(sensors.items()):
+            for j, axis in enumerate(axes):
+                # 히스토그램
+                plt.subplot(3, 3, i*3 + j + 1)
+                plt.hist(X[:, :, start+j].flatten(), bins=50, alpha=0.5, label='Original')
+                plt.hist(X_scaled[:, :, start+j].flatten(), bins=50, alpha=0.5, label='Scaled')
+                plt.title(f'{sensor_name} - {axis}-axis')
+                plt.legend()
+        
+        plt.tight_layout()
+        plt.show()
+
     def scale_sensor_data(self, X):
         """
-        센서 데이터를 각 그룹별로 스케일링합니다.
+        각 센서별로 개별적인 스케일러를 사용
+        각 센서에서 각 축별로 스케일링
         """
         total_samples, win_size, _ = X.shape
+        X_original = X.copy()  # 원본 데이터 보존
 
         # Accelerometer 스케일링
-        X_acc = X[:, :, 0:3].reshape(-1, 1)
+        X_acc = X[:, :, 0:3].reshape(-1, 3)
         X_acc_scaled = self.scaler_acc.fit_transform(X_acc)
         X[:, :, 0:3] = X_acc_scaled.reshape(total_samples, win_size, 3)
 
         # Gyroscope 스케일링
-        X_gyro = X[:, :, 3:6].reshape(-1, 1)
+        X_gyro = X[:, :, 3:6].reshape(-1, 3)
         X_gyro_scaled = self.scaler_gyro.fit_transform(X_gyro)
         X[:, :, 3:6] = X_gyro_scaled.reshape(total_samples, win_size, 3)
 
         # Orientation 스케일링
-        X_ori = X[:, :, 6:9].reshape(-1, 1)
+        X_ori = X[:, :, 6:9].reshape(-1, 3)
         X_ori_scaled = self.scaler_ori.fit_transform(X_ori)
         X[:, :, 6:9] = X_ori_scaled.reshape(total_samples, win_size, 3)
+
+        # 스케일링 분석
+        self.analyze_scaling(X_original, X)
 
         return X
 

@@ -23,28 +23,21 @@ class TrajectoryPredictor:
         데이터프레임에서 센서 데이터를 추출하고, 각 센서별로 스케일링합니다.
         """
         sensor_data = df[sensor_columns].copy().astype(np.float32)
-        # 인덱스 지정 (window 내 2차원 배열 기준)
-        acc_indices = [0, 1, 2]
-        gyro_indices = [3, 4, 5]
-        ori_indices = [6, 7, 8]
         
         # Accelerometer 스케일링
-        acc_data = sensor_data.iloc[:, acc_indices].values.reshape(-1, 1)
+        acc_data = sensor_data.iloc[:, 0:3].values
         acc_scaled = self.scaler_acc.transform(acc_data)
-        acc_scaled = acc_scaled.reshape(-1, 3)
-        sensor_data.iloc[:, acc_indices] = acc_scaled
+        sensor_data.iloc[:, 0:3] = acc_scaled
 
         # Gyroscope 스케일링
-        gyro_data = sensor_data.iloc[:, gyro_indices].values.reshape(-1, 1)
+        gyro_data = sensor_data.iloc[:, 3:6].values
         gyro_scaled = self.scaler_gyro.transform(gyro_data)
-        gyro_scaled = gyro_scaled.reshape(-1, 3)
-        sensor_data.iloc[:, gyro_indices] = gyro_scaled
+        sensor_data.iloc[:, 3:6] = gyro_scaled
 
         # Orientation 스케일링
-        ori_data = sensor_data.iloc[:, ori_indices].values.reshape(-1, 1)
+        ori_data = sensor_data.iloc[:, 6:9].values
         ori_scaled = self.scaler_ori.transform(ori_data)
-        ori_scaled = ori_scaled.reshape(-1, 3)
-        sensor_data.iloc[:, ori_indices] = ori_scaled
+        sensor_data.iloc[:, 6:9] = ori_scaled
 
         return sensor_data
 
