@@ -6,6 +6,8 @@ from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 import logging
 import time
+import seaborn as sns
+import os
 
 # 전역 로거 설정
 logging.basicConfig(
@@ -246,3 +248,44 @@ class DataProcessor:
         logger.info(f"생성된 데이터 크기 - X: {X.shape}, Y: {Y.shape}")
         
         return X, Y
+
+    @staticmethod
+    def plot_label_distribution(Y, save_path=None):
+        """
+        정답 레이블의 분포를 시각화합니다.
+        
+        Args:
+            Y (numpy.ndarray): 정답 레이블 배열 (속도, 헤딩 변화량)
+            save_path (str, optional): 그래프를 저장할 경로
+        """
+        # 디렉토리가 없으면 생성
+        if save_path:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        
+        # 속도와 헤딩 변화량 분리
+        speeds = Y[:, 0]
+        heading_changes = np.rad2deg(Y[:, 1])  # 라디안을 도(degree)로 변환
+        
+        # 그래프 생성
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        
+        # 속도 분포
+        ax1.hist(speeds, bins=50, color='blue', alpha=0.7)
+        ax1.set_title('Speed Distribution')
+        ax1.set_xlabel('Speed (m/s)')
+        ax1.set_ylabel('Frequency')
+        
+        # 헤딩 변화량 분포
+        ax2.hist(heading_changes, bins=50, color='red', alpha=0.7)
+        ax2.set_title('Heading Change Distribution')
+        ax2.set_xlabel('Heading Change (degrees)')
+        ax2.set_ylabel('Frequency')
+        
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path)
+            logger.info(f"Plot saved: {save_path}")
+        
+        plt.show()
+        logger.info("Target label distribution visualization completed")

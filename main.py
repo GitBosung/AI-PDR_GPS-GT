@@ -48,6 +48,9 @@ def main():
     X = np.concatenate(X_list, axis=0)  # 최종 X: (전체 샘플 수, window_size, 센서 채널 수)
     Y = np.concatenate(Y_list, axis=0)  # 최종 Y: (전체 샘플 수, 2) → [속도, 헤딩 변화량]
     
+    # 정답 레이블 분포 시각화
+    DataProcessor.plot_label_distribution(Y, save_path=os.path.join(BASE_DIR, 'plots', 'label_distribution.png'))
+    
     # ============================================================
     # 3. 모델 학습
     # ============================================================

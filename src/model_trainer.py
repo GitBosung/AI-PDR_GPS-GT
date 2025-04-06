@@ -1,6 +1,6 @@
 import numpy as np
 from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import LSTM, Dense
+from tensorflow.keras.layers import LSTM, Dense, BatchNormalization, Dropout
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
@@ -36,8 +36,11 @@ class ModelTrainer:
         """
         self.model = Sequential([
             LSTM(128, return_sequences=True, input_shape=(self.window_size, self.num_features)),
-            LSTM(64, return_sequences=False),
-            # LSTM(32, return_sequences=False),
+            
+            LSTM(64, return_sequences=True),
+            
+            LSTM(32, return_sequences=False),
+
             Dense(2)  # 출력: [속도, 헤딩 변화량]
         ])
         self.model.compile(optimizer='adam', loss='mse', metrics=['mae'])
@@ -213,7 +216,7 @@ class ModelTrainer:
         model = load_model(model_path)
         
         # 스케일러 로드
-        # 모델 파일명을 그대로 사용하여 스케일러 파일 경로 생성
+        # 모델 파일명에서 타임스탬프를 추출하여 스케일러 파일 경로 생성
         model_filename = os.path.basename(model_path)
         scaler_filename = model_filename.replace('model_', 'scalers_').replace('.h5', '.joblib')
         scaler_path = os.path.join(os.path.dirname(model_path), scaler_filename)
