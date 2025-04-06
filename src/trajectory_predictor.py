@@ -80,7 +80,11 @@ class TrajectoryPredictor:
         
         # 이동 경로 시각화 (화살표 표시)
         plt.figure(figsize=(8, 6))
-        plt.quiver(trajectory_x[:-1], trajectory_y[:-1], U, V, angles='xy', scale_units='xy', scale=1, alpha=0.7)
+        # 선으로 연결된 경로
+        plt.plot(trajectory_x, trajectory_y, 'b-', alpha=0.7, label='Trajectory')
+        # 각 지점에 점 표시
+        plt.plot(trajectory_x, trajectory_y, 'bo', markersize=3, alpha=0.5)
+        # 시작점과 끝점 강조
         plt.plot(trajectory_x[0], trajectory_y[0], 'ro', markersize=8, label="Start")
         plt.plot(trajectory_x[-1], trajectory_y[-1], 'go', markersize=8, label="End")
         plt.xlabel('Easting (m)')
@@ -165,8 +169,13 @@ class TrajectoryPredictor:
         
         # Ground Truth와 예측 경로 비교 시각화
         plt.figure(figsize=(10, 8))
+        # Ground Truth 경로 (점과 선)
         plt.plot(trajectory_x_gt, trajectory_y_gt, 'b-', label='Ground Truth', alpha=0.7)
+        plt.plot(trajectory_x_gt, trajectory_y_gt, 'bo', markersize=3, alpha=0.5)
+        # 예측 경로 (점과 선)
         plt.plot(trajectory_x_pred, trajectory_y_pred, 'r-', label='Predicted Path', alpha=0.7)
+        plt.plot(trajectory_x_pred, trajectory_y_pred, 'ro', markersize=3, alpha=0.5)
+        # 시작점과 끝점 강조
         plt.plot(trajectory_x_gt[0], trajectory_y_gt[0], 'go', markersize=8, label='Start Point')
         plt.plot(trajectory_x_gt[-1], trajectory_y_gt[-1], 'bo', markersize=8, label='Ground Truth End')
         plt.plot(trajectory_x_pred[-1], trajectory_y_pred[-1], 'ro', markersize=8, label='Predicted End')
