@@ -1,5 +1,5 @@
 import numpy as np
-from tensorflow.keras.models import Sequential
+from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import LSTM, Dense
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import os
 from datetime import datetime
 import pandas as pd
+import joblib
 
 class ModelTrainer:
     """
@@ -149,16 +150,35 @@ class ModelTrainer:
         )
         return history, (X_train, Y_train, X_test, Y_test)
 
-    def save_model(self, save_dir='saved_models'):
+    def save_model(self, model_dir='saved_models'):
         """
-        학습된 모델을 지정 폴더에 저장합니다.
+        모델과 스케일러를 저장합니다.
+        
+        Args:
+            model_dir: 모델 저장 디렉토리
+            
+        Returns:
+            저장된 모델 파일 경로
         """
-        os.makedirs(save_dir, exist_ok=True)
-        now = datetime.now()
-        timestamp = now.strftime("%Y%m%d_%H%M%S")
-        model_filename = f"model_{timestamp}.h5"
-        model_path = os.path.join(save_dir, model_filename)
+        # 저장 디렉토리 생성
+        os.makedirs(model_dir, exist_ok=True)
+        
+        # 현재 시간을 포함한 파일명 생성
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        model_path = os.path.join(model_dir, f'model_{timestamp}.h5')
+        scaler_path = os.path.join(model_dir, f'scalers_{timestamp}.joblib')
+        
+        # 모델 저장
         self.model.save(model_path)
+        
+        # 스케일러 저장
+        scalers = {
+            'scaler_acc': self.scaler_acc,
+            'scaler_gyro': self.scaler_gyro,
+            'scaler_ori': self.scaler_ori
+        }
+        joblib.dump(scalers, scaler_path)
+        
         return model_path
 
     def plot_training_history(self, history):
@@ -178,3 +198,28 @@ class ModelTrainer:
         plt.legend()
         plt.grid()
         plt.show()
+
+    def load_model(self, model_path):
+        """
+        모델과 스케일러를 로드합니다.
+        
+        Args:
+            model_path: 모델 파일 경로
+            
+        Returns:
+            로드된 모델
+        """
+        # 모델 로드
+        model = load_model(model_path)
+        
+        # 스케일러 로드
+        scaler_path = model_path.replace('.h5', '.joblib')
+        if os.path.exists(scaler_path):
+            scalers = joblib.load(scaler_path)
+            self.scaler_acc = scalers['scaler_acc']
+            self.scaler_gyro = scalers['scaler_gyro']
+            self.scaler_ori = scalers['scaler_ori']
+        else:
+            print("경고: 스케일러 파일을 찾을 수 없습니다.")
+        
+        return model
