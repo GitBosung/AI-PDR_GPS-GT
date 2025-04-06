@@ -220,8 +220,7 @@ class DataProcessor:
         # 센서 데이터 추출
         logger.info("센서 데이터 추출")
         sensor_columns = ['Accelerometer x', 'Accelerometer y', 'Accelerometer z',
-                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z',
-                          'Orientation x', 'Orientation y', 'Orientation z']
+                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z']
         sensor_data = df[sensor_columns].values
         
         # 데이터 길이 맞추기
