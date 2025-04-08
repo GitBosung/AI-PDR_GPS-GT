@@ -39,7 +39,7 @@ class ModelTrainer:
             LSTM(64, return_sequences=True),
             
             LSTM(32, return_sequences=False),
-
+ 
             Dense(2)  # 출력: [속도, 헤딩 변화량]
         ])
         self.model.compile(optimizer='adam', loss='mse', metrics=['mae'])

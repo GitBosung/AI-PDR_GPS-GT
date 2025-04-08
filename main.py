@@ -3,7 +3,14 @@ from src.model_trainer import ModelTrainer
 from src.trajectory_predictor import TrajectoryPredictor
 import numpy as np
 import os
+import tensorflow as tf
+import random
 
+# 시드 값 고정
+SEED = 11217  # 011217에서 앞의 0을 제외한 값
+random.seed(SEED)
+np.random.seed(SEED)
+tf.random.set_seed(SEED)
 
 # 현재 main.py 파일의 디렉토리를 기준으로 프로젝트 루트 경로 설정
 # BASE_DIR = os.path.dirname(os.path.abspath(__file__))
