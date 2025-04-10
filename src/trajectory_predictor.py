@@ -11,10 +11,11 @@ class TrajectoryPredictor:
       - 슬라이딩 윈도우 방식으로 입력 데이터를 생성하여 모델 예측 수행
       - 예측 결과를 바탕으로 경로 계산 및 다양한 시각화 제공
     """
-    def __init__(self, model, scaler_acc, scaler_gyro, window_size=50):
+    def __init__(self, model, scaler_acc, scaler_gyro, scaler_acc_norm, window_size=50):
         self.model = model
         self.scaler_acc = scaler_acc
         self.scaler_gyro = scaler_gyro
+        self.scaler_acc_norm = scaler_acc_norm
         self.window_size = window_size
 
     def _prepare_sensor_data(self, df, sensor_columns):
@@ -33,6 +34,11 @@ class TrajectoryPredictor:
         gyro_scaled = self.scaler_gyro.transform(gyro_data)
         sensor_data.iloc[:, 3:6] = gyro_scaled
 
+        # Acc_Norm 스케일링
+        acc_norm_data = sensor_data.iloc[:, 6:7].values
+        acc_norm_scaled = self.scaler_acc_norm.transform(acc_norm_data)
+        sensor_data.iloc[:, 6:7] = acc_norm_scaled
+
         return sensor_data
 
     def predict_and_plot_trajectory(self, df):
@@ -40,7 +46,8 @@ class TrajectoryPredictor:
         새로운 데이터에 대해 모델 예측을 수행하고, 이동 경로 및 속도/헤딩 변화량 분포를 시각화합니다.
         """
         sensor_columns = ['Accelerometer x', 'Accelerometer y', 'Accelerometer z',
-                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z']
+                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z',
+                          'Acc_Norm']
         
         # 센서 데이터 추출 및 스케일링
         sensor_data = self._prepare_sensor_data(df, sensor_columns)
@@ -118,7 +125,8 @@ class TrajectoryPredictor:
         
         # 센서 데이터 추출 및 스케일링
         sensor_columns = ['Accelerometer x', 'Accelerometer y', 'Accelerometer z',
-                         'Gyroscope x', 'Gyroscope y', 'Gyroscope z']
+                         'Gyroscope x', 'Gyroscope y', 'Gyroscope z',
+                         'Acc_Norm']
         sensor_data = self._prepare_sensor_data(df, sensor_columns)
         
         # 슬라이딩 윈도우 방식으로 입력 데이터 생성

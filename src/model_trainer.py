@@ -28,6 +28,7 @@ class ModelTrainer:
         # 각 센서 그룹별 MinMaxScaler (범위: -1 ~ 1)
         self.scaler_acc = MinMaxScaler(feature_range=(-1, 1))
         self.scaler_gyro = MinMaxScaler(feature_range=(-1, 1))
+        self.scaler_acc_norm = MinMaxScaler(feature_range=(-1, 1))
 
     def build_model(self):
         """
@@ -118,6 +119,11 @@ class ModelTrainer:
         X_gyro_scaled = self.scaler_gyro.fit_transform(X_gyro)
         X[:, :, 3:6] = X_gyro_scaled.reshape(total_samples, win_size, 3)
 
+        # Acc_Norm 스케일링
+        X_acc_norm = X[:, :, 6:7].reshape(-1, 1)
+        X_acc_norm_scaled = self.scaler_acc_norm.fit_transform(X_acc_norm)
+        X[:, :, 6:7] = X_acc_norm_scaled.reshape(total_samples, win_size, 1)
+
         # 스케일링 분석
         self.analyze_scaling(X_original, X)
 
@@ -170,7 +176,8 @@ class ModelTrainer:
         # 스케일러 저장
         scalers = {
             'scaler_acc': self.scaler_acc,
-            'scaler_gyro': self.scaler_gyro
+            'scaler_gyro': self.scaler_gyro,
+            'scaler_acc_norm': self.scaler_acc_norm
         }
         joblib.dump(scalers, scaler_path)
         
@@ -217,6 +224,7 @@ class ModelTrainer:
             scalers = joblib.load(scaler_path)
             self.scaler_acc = scalers['scaler_acc']
             self.scaler_gyro = scalers['scaler_gyro']
+            self.scaler_acc_norm = scalers['scaler_acc_norm']
         else:
             print(f"경고: 스케일러 파일을 찾을 수 없습니다: {scaler_path}")
         

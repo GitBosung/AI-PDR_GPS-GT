@@ -185,7 +185,7 @@ class DataProcessor:
         """
         슬라이딩 윈도우를 사용하여 모델 입력(X)와 목표값(Y)을 생성합니다.
         
-        X: 센서 데이터 (Accelerometer, Gyroscope, Orientation 등)
+        X: 센서 데이터 (Accelerometer, Gyroscope, Acc_Norm)
         Y: [속도, 1초 동안의 헤딩 변화량]
         
         매개변수:
@@ -220,7 +220,8 @@ class DataProcessor:
         # 센서 데이터 추출
         logger.info("센서 데이터 추출")
         sensor_columns = ['Accelerometer x', 'Accelerometer y', 'Accelerometer z',
-                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z']
+                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z',
+                          'Acc_Norm']
         sensor_data = df[sensor_columns].values
         
         # 데이터 길이 맞추기
