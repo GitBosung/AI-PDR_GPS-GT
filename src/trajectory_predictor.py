@@ -4,87 +4,67 @@ import matplotlib.pyplot as plt
 
 class TrajectoryPredictor:
     """
-    학습된 모델을 사용하여 새로운 데이터의 이동 경로를 예측하고 시각화하는 클래스.
+    A class to perform trajectory prediction and visualization using the trained model.
     
-    주요 기능:
-      - 센서 데이터 추출 및 스케일링 (모델 학습 시 사용한 scaler 적용)
-      - 슬라이딩 윈도우 방식으로 입력 데이터를 생성하여 모델 예측 수행
-      - 예측 결과를 바탕으로 경로 계산 및 다양한 시각화 제공
+    Main functionalities:
+      - Extract and scale sensor data using the scalers from training.
+      - Generate input data with a sliding window approach.
+      - Compute and visualize predicted trajectory, along with speed and heading change distributions.
     """
-    def __init__(self, model, scaler_acc, scaler_gyro, scaler_ori, window_size=50):
+    def __init__(self, model, scaler_acc, scaler_gyro, window_size=50):
         self.model = model
         self.scaler_acc = scaler_acc
         self.scaler_gyro = scaler_gyro
-        self.scaler_ori = scaler_ori
         self.window_size = window_size
 
     def _prepare_sensor_data(self, df, sensor_columns):
         """
-        데이터프레임에서 센서 데이터를 추출하고, 각 센서별로 스케일링합니다.
+        Extract sensor data from the DataFrame and apply scaling.
         """
         sensor_data = df[sensor_columns].copy().astype(np.float32)
-        
-        # Accelerometer 스케일링
+        # Accelerometer scaling
         acc_data = sensor_data.iloc[:, 0:3].values
         acc_scaled = self.scaler_acc.transform(acc_data)
         sensor_data.iloc[:, 0:3] = acc_scaled
-
-        # Gyroscope 스케일링
+        # Gyroscope scaling
         gyro_data = sensor_data.iloc[:, 3:6].values
         gyro_scaled = self.scaler_gyro.transform(gyro_data)
         sensor_data.iloc[:, 3:6] = gyro_scaled
-
-        # Orientation 스케일링
-        ori_data = sensor_data.iloc[:, 6:9].values
-        ori_scaled = self.scaler_ori.transform(ori_data)
-        sensor_data.iloc[:, 6:9] = ori_scaled
 
         return sensor_data
 
     def predict_and_plot_trajectory(self, df):
         """
-        새로운 데이터에 대해 모델 예측을 수행하고, 이동 경로 및 속도/헤딩 변화량 분포를 시각화합니다.
+        Predict trajectory using the model and visualize the trajectory and distributions.
         """
         sensor_columns = ['Accelerometer x', 'Accelerometer y', 'Accelerometer z',
-                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z',
-                          'Orientation x', 'Orientation y', 'Orientation z']
+                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z']
         
-        # 센서 데이터 추출 및 스케일링
         sensor_data = self._prepare_sensor_data(df, sensor_columns)
-        
-        # 슬라이딩 윈도우 방식으로 입력 데이터 생성
         X_test_new = []
-        for i in range(0, len(sensor_data) - self.window_size, self.window_size):
-            window = sensor_data.iloc[i:i + self.window_size].values
-            X_test_new.append(window)
+        # 윈도우가 겹치지 않도록 window_size 간격으로 데이터를 자름
+        for i in range(0, len(sensor_data), self.window_size):
+            if i + self.window_size <= len(sensor_data):
+                window = sensor_data.iloc[i:i + self.window_size].values
+                X_test_new.append(window)
         X_test_new = np.array(X_test_new).astype(np.float32)
-        
-        # 모델 예측 수행: 출력은 [속도, 헤딩 변화량]
         Y_pred = self.model.predict(X_test_new)
         
-        # 예측 결과를 바탕으로 이동 경로 계산
         x, y = 0, 0
         trajectory_x, trajectory_y = [x], [y]
-        U, V = [] , []
         heading = 0
         for speed, heading_change in Y_pred:
             heading += heading_change
             dx = speed * np.cos(heading)
             dy = speed * np.sin(heading)
-            U.append(dx)
-            V.append(dy)
             x += dx
             y += dy
             trajectory_x.append(x)
             trajectory_y.append(y)
         
-        # 이동 경로 시각화 (화살표 표시)
         plt.figure(figsize=(8, 6))
-        # 선으로 연결된 경로
         plt.plot(trajectory_x, trajectory_y, 'b-', alpha=0.7, label='Trajectory')
-        # 각 지점에 점 표시
         plt.plot(trajectory_x, trajectory_y, 'bo', markersize=3, alpha=0.5)
-        # 시작점과 끝점 강조
         plt.plot(trajectory_x[0], trajectory_y[0], 'ro', markersize=8, label="Start")
         plt.plot(trajectory_x[-1], trajectory_y[-1], 'go', markersize=8, label="End")
         plt.xlabel('Easting (m)')
@@ -95,7 +75,6 @@ class TrajectoryPredictor:
         plt.axis('equal')
         plt.show()
         
-        # 추가: 속도와 헤딩 변화량 분포 시각화
         speed_values = Y_pred[:, 0]
         heading_change_values = Y_pred[:, 1]
         fig, axs = plt.subplots(1, 2, figsize=(12, 5))
@@ -112,28 +91,21 @@ class TrajectoryPredictor:
 
     def compare_trajectories(self, df):
         """
-        Ground Truth와 예측 경로를 비교하여 시각화합니다.
-        
-        Args:
-            df: 전처리된 데이터프레임 (Speed, Heading Change 열 포함)
+        Compare ground truth and predicted trajectories.
         """
-        # Ground Truth 데이터 추출 (nan이 아닌 인덱스만)
         valid_indices = df['Heading Change'].notna()
         gt_speed = df['Speed'][valid_indices].values
         gt_heading_change = df['Heading Change'][valid_indices].values
         gt_heading_change = np.unwrap(gt_heading_change)
         
-        # 센서 데이터 추출 및 스케일링
         sensor_columns = ['Accelerometer x', 'Accelerometer y', 'Accelerometer z',
-                         'Gyroscope x', 'Gyroscope y', 'Gyroscope z',
-                         'Orientation x', 'Orientation y', 'Orientation z']
+                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z']
         sensor_data = self._prepare_sensor_data(df, sensor_columns)
-        
-        # 슬라이딩 윈도우 방식으로 입력 데이터 생성
         X_test_new = []
-        for i in range(0, len(sensor_data) - self.window_size, self.window_size):
-            window = sensor_data.iloc[i:i + self.window_size].values
-            X_test_new.append(window)
+        for i in range(0, len(sensor_data), self.window_size):
+            if i + self.window_size <= len(sensor_data):
+                window = sensor_data.iloc[i:i + self.window_size].values
+                X_test_new.append(window)
         X_test_new = np.array(X_test_new).astype(np.float32)
         
         # 모델 예측 수행
@@ -232,7 +204,3 @@ class TrajectoryPredictor:
         mean_heading_error = np.mean(heading_error)
         print(f"Mean Speed Error: {mean_speed_error:.4f} m/s")
         print(f"Mean Heading Change Error: {mean_heading_error:.4f} degrees")
-        
-        
-        
-        

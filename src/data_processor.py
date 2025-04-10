@@ -175,73 +175,69 @@ class DataProcessor:
         target_heading = df[df['Heading'] != 0]['Heading']
         heading_change_filtered = np.concatenate(([0], np.diff(target_heading)))
         heading_change_series = pd.Series(heading_change_filtered, index=target_heading.index)
-        df['Heading Change'] = heading_change_series
+        
+        # 각도 wrap-around 문제 해결을 위해 unwrap 처리
+        unwrapped_heading_change = np.unwrap(heading_change_series.values)
+        df['Heading Change'] = pd.Series(unwrapped_heading_change, index=target_heading.index)
         
         logger.info("속도 및 헤딩 계산 완료")
         return df
 
     @staticmethod
-    def make_XY_using_dataframe(df, window_size=50, stride=1):
+    def make_XY_using_dataframe(df, window_size=50):
         """
-        슬라이딩 윈도우를 사용하여 모델 입력(X)와 목표값(Y)을 생성합니다.
+        데이터를 50개씩 잘라서 모델 입력(X)와 목표값(Y)을 생성합니다.
         
-        X: 센서 데이터 (Accelerometer, Gyroscope, Orientation 등)
-        Y: [속도, 1초 동안의 헤딩 변화량]
+        X: 센서 데이터 (Accelerometer, Gyroscope)
+        Y: [속도, Heading Change]
         
         매개변수:
           - df: 전처리된 데이터프레임
           - window_size: 한 윈도우의 샘플 수 (기본값: 50)
-          - stride: 윈도우 이동 간격 (기본값: 1)
           
         반환값:
           - X, Y numpy 배열
         """
         start_time = time.time()
-        logger.info(f"X, Y 데이터 생성 시작 (window_size: {window_size}, stride: {stride})")
+        logger.info(f"X, Y 데이터 생성 시작 (window_size: {window_size})")
         
-        # 헤딩 변화량이 있는 데이터 선택
-        logger.info("헤딩 변화량 데이터 선택")
-        target = df[df['Heading Change'].notna()][['Speed', 'Heading Change']]
-        onesec_speed = target['Speed'].values
-        onesec_heading_change = np.unwrap(target['Heading Change'].values)
-        
-        # 보간 처리
-        logger.info("속도 및 헤딩 변화량 보간 시작")
-        original_time = np.arange(len(onesec_speed))
-        interp_time = np.linspace(0, len(onesec_speed) - 1, num=(len(onesec_speed) - 1) * 50 + 1)
-        speed_interp_func = interp1d(original_time, onesec_speed, kind='linear')
-        heading_interp_func = interp1d(original_time, onesec_heading_change, kind='linear')
-        interpolated_speed = speed_interp_func(interp_time)
-        interpolated_heading_change = heading_interp_func(interp_time)
-        
-        Y_full = np.stack((interpolated_speed, interpolated_heading_change), axis=1)
-        logger.info("보간 완료")
-        
-        # 센서 데이터 추출
+        # 센서 데이터 추출 (가속도와 자이로스코프만)
         logger.info("센서 데이터 추출")
         sensor_columns = ['Accelerometer x', 'Accelerometer y', 'Accelerometer z',
-                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z',
-                          'Orientation x', 'Orientation y', 'Orientation z']
+                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z']
         sensor_data = df[sensor_columns].values
         
-        # 데이터 길이 맞추기
-        logger.info("데이터 길이 맞추기")
-        min_length = min(len(sensor_data), len(Y_full))
-        sensor_data = sensor_data[:min_length]
-        Y_full = Y_full[:min_length]
+        # Heading Change가 nan이 아닌 인덱스 추출
+        valid_indices = df['Heading Change'].notna()
+        logger.info(f"유효한 데이터 인덱스 수: {sum(valid_indices)}")
         
-        # 슬라이딩 윈도우 적용
-        logger.info("슬라이딩 윈도우 적용")
-        X_list = []
-        Y_list = []
-        for i in range(0, min_length - window_size + 1, stride):
-            X_window = sensor_data[i:i + window_size]
-            Y_target = Y_full[i + window_size - 1]
-            X_list.append(X_window)
-            Y_list.append(Y_target)
-            
-        X = np.array(X_list)
-        Y = np.array(Y_list)
+        # 속도와 Heading Change 데이터 선택 (유효한 인덱스만)
+        logger.info("속도와 Heading Change 데이터 선택")
+        target = df[valid_indices][['Speed', 'Heading Change']]
+        Y_full = target.values
+        
+        # X 데이터 생성 (50개씩 겹치지 않게 자르기)
+        logger.info("X 데이터 생성")
+        X = []
+        Y = []
+        current_idx = 0
+        y_idx = 0  # Y 데이터 인덱스
+        
+        # 유효한 인덱스에서만 데이터 생성
+        valid_indices_list = df.index[valid_indices].tolist()
+        
+        for idx in valid_indices_list:
+            if idx + window_size <= len(sensor_data) and y_idx < len(Y_full):
+                # X 데이터 추가 (50개씩 자르기)
+                X_window = sensor_data[idx:idx + window_size]
+                X.append(X_window)
+                
+                # Y 데이터 추가 (순차적으로)
+                Y.append(Y_full[y_idx])
+                y_idx += 1
+        
+        X = np.array(X)
+        Y = np.array(Y)
         
         end_time = time.time()
         logger.info(f"X, Y 데이터 생성 완료: {end_time - start_time:.2f} 초 소요")
