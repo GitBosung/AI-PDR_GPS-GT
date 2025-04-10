@@ -28,13 +28,15 @@ class ModelTrainer:
         # 각 센서 그룹별 MinMaxScaler (범위: -1 ~ 1)
         self.scaler_acc = MinMaxScaler(feature_range=(-1, 1))
         self.scaler_gyro = MinMaxScaler(feature_range=(-1, 1))
+        self.scaler_ori = MinMaxScaler(feature_range=(-1, 1))
 
     def build_model(self):
         """
         LSTM 기반 모델을 구성합니다.
         """
         self.model = Sequential([
-            LSTM(64, return_sequences=True, input_shape=(self.window_size, self.num_features)),
+            LSTM(128, return_sequences=True, input_shape=(self.window_size, self.num_features)),
+            LSTM(64, return_sequences=True),
             LSTM(32, return_sequences=False),
             Dense(2)  # 출력: [속도, Heading Change]
         ])
@@ -113,6 +115,10 @@ class ModelTrainer:
         X_gyro = X[:, :, 3:6].reshape(-1, 3)
         X_gyro_scaled = self.scaler_gyro.fit_transform(X_gyro)
         X[:, :, 3:6] = X_gyro_scaled.reshape(total_samples, win_size, 3)
+        
+        X_ori = X[:, :, 6:9].reshape(-1, 3)
+        X_ori_scaled = self.scaler_ori.fit_transform(X_ori)
+        X[:, :, 6:9] = X_ori_scaled.reshape(total_samples, win_size, 3)
 
         # 스케일링 분석
         self.analyze_scaling(X_original, X)
@@ -213,6 +219,7 @@ class ModelTrainer:
             scalers = joblib.load(scaler_path)
             self.scaler_acc = scalers['scaler_acc']
             self.scaler_gyro = scalers['scaler_gyro']
+            self.scaler_ori = scalers['scaler_ori']
         else:
             print(f"경고: 스케일러 파일을 찾을 수 없습니다: {scaler_path}")
         

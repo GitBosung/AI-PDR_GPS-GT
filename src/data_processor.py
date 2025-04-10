@@ -188,7 +188,7 @@ class DataProcessor:
         """
         데이터를 50개씩 잘라서 모델 입력(X)와 목표값(Y)을 생성합니다.
         
-        X: 센서 데이터 (Accelerometer, Gyroscope)
+        X: 센서 데이터 (Accelerometer, Gyroscope, Orientation)
         Y: [속도, Heading Change]
         
         매개변수:
@@ -201,10 +201,11 @@ class DataProcessor:
         start_time = time.time()
         logger.info(f"X, Y 데이터 생성 시작 (window_size: {window_size})")
         
-        # 센서 데이터 추출 (가속도와 자이로스코프만)
+        # 센서 데이터 추출 (가속도, 자이로스코프, 방향)
         logger.info("센서 데이터 추출")
         sensor_columns = ['Accelerometer x', 'Accelerometer y', 'Accelerometer z',
-                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z']
+                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z',
+                          'Orientation x', 'Orientation y', 'Orientation z']
         sensor_data = df[sensor_columns].values
         
         # Heading Change가 nan이 아닌 인덱스 추출

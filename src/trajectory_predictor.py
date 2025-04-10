@@ -11,10 +11,11 @@ class TrajectoryPredictor:
       - Generate input data with a sliding window approach.
       - Compute and visualize predicted trajectory, along with speed and heading change distributions.
     """
-    def __init__(self, model, scaler_acc, scaler_gyro, window_size=50):
+    def __init__(self, model, scaler_acc, scaler_gyro, scaler_ori, window_size=50):
         self.model = model
         self.scaler_acc = scaler_acc
         self.scaler_gyro = scaler_gyro
+        self.scaler_ori = scaler_ori
         self.window_size = window_size
 
     def _prepare_sensor_data(self, df, sensor_columns):
@@ -30,6 +31,10 @@ class TrajectoryPredictor:
         gyro_data = sensor_data.iloc[:, 3:6].values
         gyro_scaled = self.scaler_gyro.transform(gyro_data)
         sensor_data.iloc[:, 3:6] = gyro_scaled
+        # Orientation scaling
+        ori_data = sensor_data.iloc[:, 6:9].values
+        ori_scaled = self.scaler_ori.transform(ori_data)
+        sensor_data.iloc[:, 6:9] = ori_scaled
 
         return sensor_data
 
@@ -38,7 +43,8 @@ class TrajectoryPredictor:
         Predict trajectory using the model and visualize the trajectory and distributions.
         """
         sensor_columns = ['Accelerometer x', 'Accelerometer y', 'Accelerometer z',
-                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z']
+                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z',
+                          'Orientation x', 'Orientation y', 'Orientation z']
         
         sensor_data = self._prepare_sensor_data(df, sensor_columns)
         X_test_new = []
@@ -99,7 +105,8 @@ class TrajectoryPredictor:
         gt_heading_change = np.unwrap(gt_heading_change)
         
         sensor_columns = ['Accelerometer x', 'Accelerometer y', 'Accelerometer z',
-                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z']
+                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z',
+                          'Orientation x', 'Orientation y', 'Orientation z']
         sensor_data = self._prepare_sensor_data(df, sensor_columns)
         X_test_new = []
         for i in range(0, len(sensor_data), self.window_size):
