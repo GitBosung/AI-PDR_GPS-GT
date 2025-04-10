@@ -11,11 +11,12 @@ class TrajectoryPredictor:
       - Generate input data with a sliding window approach.
       - Compute and visualize predicted trajectory, along with speed and heading change distributions.
     """
-    def __init__(self, model, scaler_acc, scaler_gyro, scaler_ori, window_size=50):
+    def __init__(self, model, scaler_acc, scaler_gyro, scaler_ori, scaler_acc_norm, window_size=50):
         self.model = model
         self.scaler_acc = scaler_acc
         self.scaler_gyro = scaler_gyro
         self.scaler_ori = scaler_ori
+        self.scaler_acc_norm = scaler_acc_norm
         self.window_size = window_size
 
     def _prepare_sensor_data(self, df, sensor_columns):
@@ -27,14 +28,21 @@ class TrajectoryPredictor:
         acc_data = sensor_data.iloc[:, 0:3].values
         acc_scaled = self.scaler_acc.transform(acc_data)
         sensor_data.iloc[:, 0:3] = acc_scaled
+        
+        # Acc_Norm scaling
+        acc_norm_data = sensor_data.iloc[:, 3:4].values
+        acc_norm_scaled = self.scaler_acc_norm.transform(acc_norm_data)
+        sensor_data.iloc[:, 3:4] = acc_norm_scaled
+        
         # Gyroscope scaling
-        gyro_data = sensor_data.iloc[:, 3:6].values
+        gyro_data = sensor_data.iloc[:, 4:7].values
         gyro_scaled = self.scaler_gyro.transform(gyro_data)
-        sensor_data.iloc[:, 3:6] = gyro_scaled
+        sensor_data.iloc[:, 4:7] = gyro_scaled
+        
         # Orientation scaling
-        ori_data = sensor_data.iloc[:, 6:9].values
+        ori_data = sensor_data.iloc[:, 7:10].values
         ori_scaled = self.scaler_ori.transform(ori_data)
-        sensor_data.iloc[:, 6:9] = ori_scaled
+        sensor_data.iloc[:, 7:10] = ori_scaled
 
         return sensor_data
 
@@ -44,7 +52,7 @@ class TrajectoryPredictor:
         """
         sensor_columns = ['Accelerometer x', 'Accelerometer y', 'Accelerometer z',
                           'Gyroscope x', 'Gyroscope y', 'Gyroscope z',
-                          'Orientation x', 'Orientation y', 'Orientation z']
+                          'Orientation x', 'Orientation y', 'Orientation z', 'Acc_Norm']
         
         sensor_data = self._prepare_sensor_data(df, sensor_columns)
         X_test_new = []
@@ -106,7 +114,7 @@ class TrajectoryPredictor:
         
         sensor_columns = ['Accelerometer x', 'Accelerometer y', 'Accelerometer z',
                           'Gyroscope x', 'Gyroscope y', 'Gyroscope z',
-                          'Orientation x', 'Orientation y', 'Orientation z']
+                          'Orientation x', 'Orientation y', 'Orientation z', 'Acc_Norm']
         sensor_data = self._prepare_sensor_data(df, sensor_columns)
         X_test_new = []
         for i in range(0, len(sensor_data), self.window_size):

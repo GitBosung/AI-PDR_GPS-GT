@@ -205,7 +205,7 @@ class DataProcessor:
         logger.info("센서 데이터 추출")
         sensor_columns = ['Accelerometer x', 'Accelerometer y', 'Accelerometer z',
                           'Gyroscope x', 'Gyroscope y', 'Gyroscope z',
-                          'Orientation x', 'Orientation y', 'Orientation z']
+                          'Orientation x', 'Orientation y', 'Orientation z', 'Acc_Norm']
         sensor_data = df[sensor_columns].values
         
         # Heading Change가 nan이 아닌 인덱스 추출
