@@ -1,6 +1,7 @@
 import numpy as np
 from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import LSTM, Dense, BatchNormalization, Dropout
+from tensorflow.keras.layers import LSTM, Dense, BatchNormalization, Dropout, Layer
+from tensorflow.keras import backend as K
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
@@ -8,6 +9,29 @@ import os
 from datetime import datetime
 import pandas as pd
 import joblib
+
+class SelfAttention(Layer):
+    def __init__(self, **kwargs):
+        super(SelfAttention, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        self.W = self.add_weight(name='attention_weight',
+                               shape=(input_shape[-1], input_shape[-1]),
+                               initializer='glorot_uniform',
+                               trainable=True)
+        super(SelfAttention, self).build(input_shape)
+
+    def call(self, x):
+        # Attention score 계산
+        attention = K.dot(x, self.W)  # (batch_size, seq_len, hidden_dim)
+        attention = K.softmax(attention, axis=1)  # (batch_size, seq_len, hidden_dim)
+        
+        # Attention 적용
+        output = K.sum(attention * x, axis=1)  # (batch_size, hidden_dim)
+        return output
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0], input_shape[-1])
 
 class ModelTrainer:
     """
@@ -39,8 +63,10 @@ class ModelTrainer:
             
             LSTM(64, return_sequences=True),
             
-            LSTM(32, return_sequences=False),
- 
+            LSTM(32, return_sequences=True),
+            
+            SelfAttention(),
+            
             Dense(2)  # 출력: [속도, 헤딩 변화량]
         ])
         self.model.compile(optimizer='adam', loss='mse', metrics=['mae'])
@@ -170,8 +196,9 @@ class ModelTrainer:
         model_path = os.path.join(model_dir, f'model_{timestamp}.h5')
         scaler_path = os.path.join(model_dir, f'scalers_{timestamp}.joblib')
         
-        # 모델 저장
-        self.model.save(model_path)
+        # 커스텀 레이어를 포함한 모델 저장
+        custom_objects = {'SelfAttention': SelfAttention}
+        self.model.save(model_path, include_optimizer=True, save_format='h5')
         
         # 스케일러 저장
         scalers = {
@@ -211,8 +238,9 @@ class ModelTrainer:
         Returns:
             로드된 모델
         """
-        # 모델 로드
-        model = load_model(model_path)
+        # 커스텀 레이어를 포함한 모델 로드
+        custom_objects = {'SelfAttention': SelfAttention}
+        model = load_model(model_path, custom_objects=custom_objects)
         
         # 스케일러 로드
         # 모델 파일명에서 타임스탬프를 추출하여 스케일러 파일 경로 생성
