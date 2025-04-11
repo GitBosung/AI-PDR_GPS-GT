@@ -11,35 +11,20 @@ class TrajectoryPredictor:
       - 슬라이딩 윈도우 방식으로 입력 데이터를 생성하여 모델 예측 수행
       - 예측 결과를 바탕으로 경로 계산 및 다양한 시각화 제공
     """
-    def __init__(self, model, scaler_acc, scaler_gyro, scaler_acc_norm, window_size=50):
+    def __init__(self, model, scaler, window_size=50):
         self.model = model
-        self.scaler_acc = scaler_acc
-        self.scaler_gyro = scaler_gyro
-        self.scaler_acc_norm = scaler_acc_norm
+        # self.scaler_acc = scaler_acc
+        # self.scaler_gyro = scaler_gyro
+        # self.scaler_acc_norm = scaler_acc_norm
+        self.scaler = scaler
         self.window_size = window_size
 
     def _prepare_sensor_data(self, df, sensor_columns):
-        """
-        데이터프레임에서 센서 데이터를 추출하고, 각 센서별로 스케일링합니다.
-        """
         sensor_data = df[sensor_columns].copy().astype(np.float32)
-        
-        # Accelerometer 스케일링
-        acc_data = sensor_data.iloc[:, 0:3].values
-        acc_scaled = self.scaler_acc.transform(acc_data)
-        sensor_data.iloc[:, 0:3] = acc_scaled
-
-        # Gyroscope 스케일링
-        gyro_data = sensor_data.iloc[:, 3:6].values
-        gyro_scaled = self.scaler_gyro.transform(gyro_data)
-        sensor_data.iloc[:, 3:6] = gyro_scaled
-
-        # Acc_Norm 스케일링
-        acc_norm_data = sensor_data.iloc[:, 6:7].values
-        acc_norm_scaled = self.scaler_acc_norm.transform(acc_norm_data)
-        sensor_data.iloc[:, 6:7] = acc_norm_scaled
-
-        return sensor_data
+        sensor_data_scaled = self.scaler.transform(sensor_data.values)
+        # 다시 DataFrame으로 변환 (원래 열 정보 유지)
+        sensor_data_scaled = pd.DataFrame(sensor_data_scaled, columns=sensor_data.columns)
+        return sensor_data_scaled
 
     def predict_and_plot_trajectory(self, df):
         """

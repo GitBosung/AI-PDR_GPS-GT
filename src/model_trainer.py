@@ -1,7 +1,7 @@
 import numpy as np
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import LSTM, Dense, BatchNormalization, Dropout
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import os
@@ -25,10 +25,11 @@ class ModelTrainer:
         self.epochs = epochs
         self.batch_size = batch_size
         self.model = None
-        # 각 센서 그룹별 MinMaxScaler (범위: -1 ~ 1)
-        self.scaler_acc = MinMaxScaler(feature_range=(-1, 1))
-        self.scaler_gyro = MinMaxScaler(feature_range=(-1, 1))
-        self.scaler_acc_norm = MinMaxScaler(feature_range=(-1, 1))
+        # 각 센서 그룹별 StandardScaler
+        # self.scaler_acc = StandardScaler()
+        # self.scaler_gyro = StandardScaler()
+        # self.scaler_acc_norm = StandardScaler()
+        self.scaler = StandardScaler()
 
     def build_model(self):
         """
@@ -102,32 +103,22 @@ class ModelTrainer:
         plt.show()
 
     def scale_sensor_data(self, X):
-        """
-        각 센서별로 개별적인 스케일러를 사용
-        각 센서에서 각 축별로 스케일링
-        """
-        total_samples, win_size, _ = X.shape
+        total_samples, win_size, num_features = X.shape
         X_original = X.copy()  # 원본 데이터 보존
 
-        # Accelerometer 스케일링
-        X_acc = X[:, :, 0:3].reshape(-1, 3)
-        X_acc_scaled = self.scaler_acc.fit_transform(X_acc)
-        X[:, :, 0:3] = X_acc_scaled.reshape(total_samples, win_size, 3)
-
-        # Gyroscope 스케일링
-        X_gyro = X[:, :, 3:6].reshape(-1, 3)
-        X_gyro_scaled = self.scaler_gyro.fit_transform(X_gyro)
-        X[:, :, 3:6] = X_gyro_scaled.reshape(total_samples, win_size, 3)
-
-        # Acc_Norm 스케일링
-        X_acc_norm = X[:, :, 6:7].reshape(-1, 1)
-        X_acc_norm_scaled = self.scaler_acc_norm.fit_transform(X_acc_norm)
-        X[:, :, 6:7] = X_acc_norm_scaled.reshape(total_samples, win_size, 1)
-
-        # 스케일링 분석
-        self.analyze_scaling(X_original, X)
-
-        return X
+        # 3차원 데이터를 2차원으로 변환 (전체 시간 창을 하나의 샘플로 취급)
+        X_reshaped = X.reshape(-1, num_features)
+        
+        # 2차원 데이터에 대해 스케일링 적용
+        X_scaled = self.scaler.fit_transform(X_reshaped)
+        
+        # 다시 원래의 shape으로 변환
+        X_scaled = X_scaled.reshape(total_samples, win_size, num_features)
+        
+        # 스케일링 전/후 비교 분석 및 시각화 (원본과 변환된 데이터를 전달)
+        self.analyze_scaling(X_original, X_scaled)
+        
+        return X_scaled
 
     def train_model(self, X, Y):
         """
@@ -175,9 +166,10 @@ class ModelTrainer:
         
         # 스케일러 저장
         scalers = {
-            'scaler_acc': self.scaler_acc,
-            'scaler_gyro': self.scaler_gyro,
-            'scaler_acc_norm': self.scaler_acc_norm
+            # 'scaler_acc': self.scaler_acc,
+            # 'scaler_gyro': self.scaler_gyro,
+            # 'scaler_acc_norm': self.scaler_acc_norm
+            'scaler': self.scaler
         }
         joblib.dump(scalers, scaler_path)
         
@@ -222,9 +214,7 @@ class ModelTrainer:
         
         if os.path.exists(scaler_path):
             scalers = joblib.load(scaler_path)
-            self.scaler_acc = scalers['scaler_acc']
-            self.scaler_gyro = scalers['scaler_gyro']
-            self.scaler_acc_norm = scalers['scaler_acc_norm']
+            self.scaler= scalers['scaler']
         else:
             print(f"경고: 스케일러 파일을 찾을 수 없습니다: {scaler_path}")
         
