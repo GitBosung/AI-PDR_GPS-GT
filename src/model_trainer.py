@@ -37,8 +37,9 @@ class ModelTrainer:
         
         self.model = Sequential([
             LSTM(64, return_sequences=True, input_shape=(self.window_size, self.num_features)),
-            LSTM(32, return_sequences=True),
-            LSTM(16, return_sequences=False),
+            
+            LSTM(32, return_sequences=False),
+            
             Dense(2)  # [속도, 헤딩 변화량]
         ])
         
