@@ -84,17 +84,8 @@ def main():
     # ============================================================
     # 4. 테스트 데이터에 대해 예측 및 이동 경로 시각화
     # ============================================================
-    test_paths = [
-        os.path.join(BASE_DIR, 'data', 'test_data', '3f_1.csv'),
-        os.path.join(BASE_DIR, 'data', 'test_data', '3f_2.csv'),
-        os.path.join(BASE_DIR, 'data', 'test_data', '3f_swing1.csv'),
-        os.path.join(BASE_DIR, 'data', 'test_data', '3f_swing2.csv'),
-        os.path.join(BASE_DIR, 'data', 'test_data', '3f_looking01.csv'),
-        os.path.join(BASE_DIR, 'data', 'test_data', '3f_looking02.csv')
-    ]
-    
     for df_learn in df_list:
-            predictor = TrajectoryPredictor(trainer.model, trainer.scaler_acc, trainer.scaler_gyro)
+            predictor = TrajectoryPredictor(trainer.model, trainer.scaler)
             # 예측 경로 시각화
             predictor.compare_trajectories(df_learn)
     
@@ -109,7 +100,7 @@ def main():
     for test_path in test_paths:
         if os.path.exists(test_path):
             df_test = DataProcessor.load_and_preprocess_csv(test_path, skiprows=50)
-            predictor = TrajectoryPredictor(trainer.model, trainer.scaler_acc, trainer.scaler_gyro)
+            predictor = TrajectoryPredictor(trainer.model, trainer.scaler)
             
             # 예측 경로 시각화
             predictor.predict_and_plot_trajectory(df_test)
