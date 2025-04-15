@@ -1,7 +1,9 @@
 # src/model_trainer.py
+
 import numpy as np
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import LSTM, Dense, BatchNormalization, Dropout
+from tensorflow.keras.losses import Huber  # Huber Loss import 추가
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
@@ -32,16 +34,16 @@ class ModelTrainer:
           - 입력 shape: (window_size, num_features)
           - 출력: [속도, 헤딩 변화량]
         """
+        
         self.model = Sequential([
             LSTM(64, return_sequences=True, input_shape=(self.window_size, self.num_features)),
-            
             LSTM(32, return_sequences=True),
-   
             LSTM(16, return_sequences=False),
-            
             Dense(2)  # [속도, 헤딩 변화량]
         ])
-        self.model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+        
+        # 기존의 mse loss 대신 Huber loss 사용 (delta 값은 하이퍼파라미터로 설정, 여기서는 예시로 1.0 사용)
+        self.model.compile(optimizer='adam', loss=Huber(delta=1.0), metrics=['mae'])
         return self.model
 
     def analyze_scaling(self, X, X_scaled):
