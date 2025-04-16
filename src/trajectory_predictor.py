@@ -6,37 +6,62 @@ import pandas as pd
 class TrajectoryPredictor:
     """
     학습된 모델을 사용하여 새로운 센서 데이터에 대해 예측 및 이동 경로 시각화를 수행하는 클래스
-      - 학습 시 사용한 scaler 적용
+      - 각 센서별 스케일러 적용
       - 슬라이딩 윈도우 방식으로 입력 데이터를 생성하여 예측 수행
       - 예측 결과를 기반으로 실제 경로와 예측 경로 비교
     """
-    def __init__(self, model, scaler, window_size=50):
+    def __init__(self, model, sensor_scalers, window_size=50):
         self.model = model
-        self.scaler = scaler
+        self.sensor_scalers = sensor_scalers
         self.window_size = window_size
 
     def _prepare_sensor_data(self, df):
         """
         예측에 사용할 센서 데이터를 준비함.
-          - 사용 피처: 10개
+          - 사용 피처: 13개
             [Accelerometer x, Accelerometer y, Accelerometer z,
              Gyroscope x, Gyroscope y, Gyroscope z,
-             Acc_Norm]
-          - 전체 피처에 대해 scaler 적용
+             Acc_Norm,
+             cos_roll, sin_roll, cos_pitch, sin_pitch, cos_yaw, sin_yaw]
+          - 각 축별로 개별적인 MinMaxScaler 적용 (-1 ~ 1 범위)
+          - Orientation 관련 피처는 스케일링 없이 그대로 사용
         """
+        # 기본 센서 데이터
         sensor_columns = ['Accelerometer x', 'Accelerometer y', 'Accelerometer z',
-                          'Gyroscope x', 'Gyroscope y', 'Gyroscope z',
-                          'Acc_Norm']
+                         'Gyroscope x', 'Gyroscope y', 'Gyroscope z',
+                         'Acc_Norm']
         
+        # Orientation 관련 피처
+        orientation_columns = ['cos_roll', 'sin_roll', 'cos_pitch', 'sin_pitch', 'cos_yaw', 'sin_yaw']
+        
+        # 모든 컬럼 결합
+        all_columns = sensor_columns + orientation_columns
+        
+        # 데이터 준비
         sensor_data = df[sensor_columns].copy().astype('float32')
-        scaled_array = self.scaler.transform(sensor_data.values)
-        sensor_data_scaled = pd.DataFrame(scaled_array, columns=sensor_columns)
+        orientation_data = df[orientation_columns].copy().astype('float32')
         
+        # 스케일링된 데이터를 저장할 배열 생성
+        scaled_data = np.zeros((len(df), len(all_columns)), dtype=np.float32)
+        
+        # 기본 센서 데이터 스케일링
+        for i, col in enumerate(sensor_columns):
+            if col in self.sensor_scalers:
+                scaler = self.sensor_scalers[col]
+                scaled_data[:, i] = scaler.transform(sensor_data[col].values.reshape(-1, 1)).flatten()
+            else:
+                print(f"경고: {col}에 대한 스케일러를 찾을 수 없습니다.")
+                scaled_data[:, i] = sensor_data[col].values
+        
+        # Orientation 데이터는 스케일링 없이 그대로 복사
+        scaled_data[:, len(sensor_columns):] = orientation_data.values
+        
+        sensor_data_scaled = pd.DataFrame(scaled_data, columns=all_columns)
         return sensor_data_scaled
 
     def predict_and_plot_trajectory(self, df):
         """
-        새로운 테스트 데이터에 대해 예측을 수행한 후 이동 경로를 시각화
+        새로운 테스트 데이터에 대해 예측을 수행한 후 예측된 속도, 헤딩 변화량과 누적 이동 경로를 시각화
         """
         sensor_data = self._prepare_sensor_data(df)
         
@@ -50,7 +75,31 @@ class TrajectoryPredictor:
         # 모델 예측 (출력: [속도, 헤딩 변화량])
         Y_pred = self.model.predict(X_test_new)
         
-        # 예측 결과로부터 이동 경로 계산 (누적 방식)
+        # 예측된 속도와 헤딩 변화량을 개별 플롯으로 시각화 (점과 선 연결)
+        plt.figure(figsize=(12, 5))
+        
+        # 속도 플롯
+        plt.subplot(1, 2, 1)
+        plt.plot(Y_pred[:, 0], 'bo-', markersize=5, label='Predicted Speed')
+        plt.xlabel('Time Window Index')
+        plt.ylabel('Speed (m/s)')
+        plt.title('Predicted Speed')
+        plt.legend()
+        plt.grid(True)
+        
+        # 헤딩 변화량 플롯
+        plt.subplot(1, 2, 2)
+        plt.plot(Y_pred[:, 1], 'ro-', markersize=5, label='Predicted Heading Change')
+        plt.xlabel('Time Window Index')
+        plt.ylabel('Heading Change (rad)')
+        plt.title('Predicted Heading Change')
+        plt.legend()
+        plt.grid(True)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # 예측 결과를 누적 방식으로 이동 경로 계산
         x, y = 0, 0
         trajectory_x, trajectory_y = [x], [y]
         heading = 0
@@ -63,6 +112,7 @@ class TrajectoryPredictor:
             trajectory_x.append(x)
             trajectory_y.append(y)
         
+        # 이동 경로 플롯 (점과 선으로 연결)
         plt.figure(figsize=(8, 6))
         plt.plot(trajectory_x, trajectory_y, 'b-', alpha=0.7, label='Trajectory')
         plt.plot(trajectory_x, trajectory_y, 'bo', markersize=3, alpha=0.5)
@@ -72,9 +122,10 @@ class TrajectoryPredictor:
         plt.ylabel('Northing (m)')
         plt.title('Predicted Movement Trajectory')
         plt.legend()
-        plt.grid()
+        plt.grid(True)
         plt.axis('equal')
         plt.show()
+
 
     def compare_trajectories(self, df):
         """
