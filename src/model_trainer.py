@@ -1,8 +1,7 @@
 import numpy as np
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import LSTM, Dense, BatchNormalization, Dropout
-from tensorflow.keras.losses import Huber
-from sklearn.preprocessing import MinMaxScaler  # 변경: StandardScaler → MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler 
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import os
@@ -29,20 +28,17 @@ class ModelTrainer:
     def build_model(self):
         self.model = Sequential([
             LSTM(128, return_sequences=True, input_shape=(self.window_size, self.num_features)),
-            Dropout(0.2),
             
             LSTM(64, return_sequences=True),
-            Dropout(0.2),
             
             LSTM(32, return_sequences=False),
             
             Dense(2)  # [속도, 헤딩 변화량]
         ])
-        self.model.compile(optimizer='adam', loss=Huber(delta=1.0), metrics=['mae'])
+        self.model.compile(optimizer='adam', loss='mse', metrics=['mae'])
         return self.model
 
     def analyze_scaling(self, X, X_scaled):
-        axes = ['x', 'y', 'z']
         sensors = {
             'Accelerometer': (0, 3),
             'Gyroscope': (3, 6),
@@ -54,22 +50,23 @@ class ModelTrainer:
             for i in range(start, end):
                 original = X[:, :, i].flatten()
                 scaled = X_scaled[:, :, i].flatten()
-                stats = pd.DataFrame({
+                stats_dict = {
                     'Original': {
-                        'Min': np.nanmin(original), 
-                        'Max': np.nanmax(original), 
-                        'Mean': np.nanmean(original), 
-                        'Std': np.nanstd(original)
+                        'Min': np.min(original),
+                        'Max': np.max(original),
+                        'Mean': np.mean(original),
+                        'Std': np.std(original),
                     },
                     'Scaled': {
-                        'Min': np.nanmin(scaled), 
-                        'Max': np.nanmax(scaled), 
-                        'Mean': np.nanmean(scaled), 
-                        'Std': np.nanstd(scaled)
+                        'Min': np.min(scaled),
+                        'Max': np.max(scaled),
+                        'Mean': np.mean(scaled),
+                        'Std': np.std(scaled),
                     }
-                }, index=[0])
-                print(f"Feature index {i}:")
-                print(stats)
+                }
+
+            stats = pd.DataFrame.from_dict(stats_dict, orient='index')
+            print(stats)
 
         total_plots = sum(end - start for sensor_name, (start, end) in sensors.items())
         n_cols = 4
