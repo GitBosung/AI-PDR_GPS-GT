@@ -14,11 +14,14 @@ class TrajectoryPredictor:
         self.window_size = window_size
 
     def _prepare_sensor_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        sensor_cols = [
-            'Accelerometer x', 'Accelerometer y', 'Accelerometer z',
-            'Gyroscope x', 'Gyroscope y', 'Gyroscope z',
-            'Acc_Norm'
+        sensor_cols =  [
+            'Accelerometer x','Accelerometer y','Accelerometer z',
+            'Gyroscope x','Gyroscope y','Gyroscope z',
+            'Acc_Norm',
+            # 6D 회전 피처 추가
+            'rot6_0','rot6_1','rot6_2','rot6_3','rot6_4','rot6_5'
         ]
+
         raw = df[sensor_cols].astype(np.float32).copy()
         # 결과를 담을 numpy array
         arr = raw.values  # shape = (n_samples, 7)
@@ -47,9 +50,30 @@ class TrajectoryPredictor:
         ]
         X_test_new = np.array(X_test_new, dtype=np.float32)
 
-        Y_pred = self.model.predict(X_test_new)
+        # 1) 모델 예측
+        Y_pred = self.model.predict(X_test_new)  # shape: (num_windows, 2)
 
-        # 누적 궤적 계산
+        # 2) (추가) 예측된 속도와 헤딩 변화 플롯
+        plt.figure(figsize=(8, 4))
+        plt.plot(Y_pred[:, 0], '-o', label='Predicted Speed', markersize=4)
+        plt.xlabel('Window Index')
+        plt.ylabel('Value')
+        plt.title('Predicted Speed')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+        
+                # 2) (추가) 예측된 속도와 헤딩 변화 플롯
+        plt.figure(figsize=(8, 4))
+        plt.plot(Y_pred[:, 1], '-o', label='Predicted Heading Change', markersize=4)
+        plt.xlabel('Window Index')
+        plt.ylabel('Value')
+        plt.title('Predicted Heading Change')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+
+        # 3) 누적 궤적 계산
         x = y = heading = 0.0
         traj_x, traj_y = [x], [y]
         for speed, dh in Y_pred:
@@ -59,6 +83,7 @@ class TrajectoryPredictor:
             traj_x.append(x)
             traj_y.append(y)
 
+        # 4) 최종 궤적 플롯
         plt.figure(figsize=(8, 6))
         plt.plot(traj_x, traj_y, 'b-o', alpha=0.7, label='Predicted Path', markersize=4)
         plt.plot(traj_x[0], traj_y[0], 'go', markersize=8, label='Start')
@@ -67,7 +92,7 @@ class TrajectoryPredictor:
         plt.ylabel('Northing (m)')
         plt.title('Predicted Movement Trajectory')
         plt.legend()
-        plt.grid()
+        plt.grid(True)
         plt.axis('equal')
         plt.show()
 

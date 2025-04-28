@@ -1,7 +1,9 @@
 import numpy as np
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import LSTM, Dense, BatchNormalization, Dropout
-from sklearn.preprocessing import MinMaxScaler 
+from tensorflow.keras.losses import Huber  
+from tensorflow.keras.optimizers import Adam   
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import os
@@ -26,16 +28,24 @@ class ModelTrainer:
         self.sensor_scalers = {}  # 축별 스케일러 저장
 
     def build_model(self):
+        # 고정 학습률 Adam
+        adam = Adam(learning_rate=3e-4, beta_1=0.9, beta_2=0.999, epsilon=1e-7)
+
         self.model = Sequential([
             LSTM(128, return_sequences=True, input_shape=(self.window_size, self.num_features)),
-            
+
             LSTM(64, return_sequences=True),
-            
+
             LSTM(32, return_sequences=False),
-            
-            Dense(2)  # [속도, 헤딩 변화량]
+
+            Dense(2)   # [속도, 헤딩 변화량]
         ])
-        self.model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+
+        self.model.compile(
+            optimizer=adam,
+            loss=Huber(delta=1.0),
+            metrics=['mae']
+        )
         return self.model
 
     def analyze_scaling(self, X, X_scaled):
@@ -51,89 +61,93 @@ class ModelTrainer:
                 original = X[:, :, i].flatten()
                 scaled = X_scaled[:, :, i].flatten()
                 stats_dict = {
-                    'Original': {
-                        'Min': np.min(original),
-                        'Max': np.max(original),
-                        'Mean': np.mean(original),
-                        'Std': np.std(original),
-                    },
-                    'Scaled': {
-                        'Min': np.min(scaled),
-                        'Max': np.max(scaled),
-                        'Mean': np.mean(scaled),
-                        'Std': np.std(scaled),
-                    }
+                    'Original': {'Min': np.min(original), 'Max': np.max(original), 'Mean': np.mean(original), 'Std': np.std(original)},
+                    'Scaled':   {'Min': np.min(scaled),   'Max': np.max(scaled),   'Mean': np.mean(scaled),   'Std': np.std(scaled)},
                 }
+                stats = pd.DataFrame.from_dict(stats_dict, orient='index')
+                print(stats)
 
-            stats = pd.DataFrame.from_dict(stats_dict, orient='index')
-            print(stats)
-
-        total_plots = sum(end - start for sensor_name, (start, end) in sensors.items())
+        # 히스토그램 시각화
+        total_plots = sum(end - start for _, (start, end) in sensors.items())
         n_cols = 4
         n_rows = math.ceil(total_plots / n_cols)
 
         plt.figure(figsize=(15, 15))
-        subplot_index = 1
+        idx = 1
         for sensor_name, (start, end) in sensors.items():
             for i in range(start, end):
-                plt.subplot(n_rows, n_cols, subplot_index)
-                subplot_index += 1
+                plt.subplot(n_rows, n_cols, idx)
+                idx += 1
                 plt.hist(X[:, :, i].flatten(), bins=50, alpha=0.5, label='Original')
                 plt.hist(X_scaled[:, :, i].flatten(), bins=50, alpha=0.5, label='Scaled')
-                plt.title(f'{sensor_name} index {i}')
+                plt.title(f'{sensor_name} idx {i}')
                 plt.legend()
         plt.tight_layout()
         plt.show()
 
-    def scale_sensor_data(self, X):
-        total_samples, win_size, num_features = X.shape
-        X_original = X.copy()
+    def scale_sensor_data(self, X, fit: bool = True):
+        """
+        X: (samples, window_size, features)
+        fit=True  -> 축별 scaler.fit_transform
+        fit=False -> scaler.transform
+        """
+        n_samples, win, feat = X.shape
         X_scaled = np.zeros_like(X)
-
-        # 기존에 스케일링 할 피처: Accelerometer, Gyroscope, Acc_Norm (총 7 피처)
         axis_indices = {
-            'Accelerometer x': 0,
-            'Accelerometer y': 1,
-            'Accelerometer z': 2,
-            'Gyroscope x': 3,
-            'Gyroscope y': 4,
-            'Gyroscope z': 5,
-            'Acc_Norm': 6
+            'Accelerometer x': 0, 'Accelerometer y': 1, 'Accelerometer z': 2,
+            'Gyroscope x': 3,     'Gyroscope y': 4,     'Gyroscope z': 5,
+            'Acc_Norm': 6,
+            'rot6_0': 7, 'rot6_1': 8, 'rot6_2': 9, 'rot6_3': 10, 'rot6_4': 11, 'rot6_5': 12  # 모든 Orientation 피처 추가
         }
+        for name, idx in axis_indices.items():
+            col = X[:, :, idx].reshape(-1, 1)
+            if name in ['rot6_0','rot6_1','rot6_2','rot6_3','rot6_4','rot6_5']:  # Orientation 피처는 스케일링하지 않음
+                X_scaled[:, :, idx] = col.reshape(n_samples, win)
+                continue
+            if fit:
+                scaler = MinMaxScaler(feature_range=(-1, 1))
+                scaled = scaler.fit_transform(col)
+                self.sensor_scalers[name] = scaler
+            else:
+                scaler = self.sensor_scalers[name]
+                scaled = scaler.transform(col)
+            X_scaled[:, :, idx] = scaled.reshape(n_samples, win)
 
-        for axis_name, idx in axis_indices.items():
-            axis_data = X[:, :, idx].reshape(-1, 1)
-            scaler = MinMaxScaler(feature_range=(-1, 1))  # MinMaxScaler 적용
-            axis_scaled = scaler.fit_transform(axis_data)
-            X_scaled[:, :, idx] = axis_scaled.reshape(total_samples, win_size)
-            self.sensor_scalers[axis_name] = scaler
+        # Orientation 등 나머지 피처는 그대로 복사
+        if feat > len(axis_indices):
+            X_scaled[:, :, len(axis_indices):] = X[:, :, len(axis_indices):]
 
-        # Orientation 관련 피처 (cos_roll, sin_roll, ...)는 스케일링 없이 그대로 복사 (인덱스 7부터 시작)
-        if num_features > 7:
-            X_scaled[:, :, 7:] = X_original[:, :, 7:]
-        
-        self.analyze_scaling(X_original, X_scaled)
+        if fit:
+            self.analyze_scaling(X, X_scaled)
         return X_scaled
 
     def train_model(self, X, Y):
-        X = self.scale_sensor_data(X)
-        X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=1217)
-        X_train = X_train.astype(np.float32)
-        X_test = X_test.astype(np.float32)
+        # 1) train/test split
+        X_train, X_test, Y_train, Y_test = train_test_split(
+            X, Y, test_size=0.2, random_state=1217)
+        # 2) fit & transform on train, transform on test
+        X_train = self.scale_sensor_data(X_train, fit=True).astype(np.float32)
+        X_test  = self.scale_sensor_data(X_test,  fit=False).astype(np.float32)
         Y_train = Y_train.astype(np.float32)
-        Y_test = Y_test.astype(np.float32)
+        Y_test  = Y_test.astype(np.float32)
+
         self.build_model()
-        history = self.model.fit(X_train, Y_train, batch_size=self.batch_size, epochs=self.epochs,
-                                 validation_data=(X_test, Y_test), verbose=1)
+        history = self.model.fit(
+            X_train, Y_train,
+            validation_data=(X_test, Y_test),
+            batch_size=self.batch_size,
+            epochs=self.epochs,
+            verbose=1
+        )
         return history, (X_train, Y_train, X_test, Y_test)
 
     def plot_training_history(self, history):
         train_loss = history.history['loss']
-        val_loss = history.history['val_loss']
-        epochs_range = range(1, len(train_loss) + 1)
+        val_loss   = history.history['val_loss']
+        epochs_rng = range(1, len(train_loss) + 1)
         plt.figure(figsize=(8, 5))
-        plt.plot(epochs_range, train_loss, label='Training Loss')
-        plt.plot(epochs_range, val_loss, label='Validation Loss')
+        plt.plot(epochs_rng, train_loss, label='Training Loss')
+        plt.plot(epochs_rng, val_loss,   label='Validation Loss')
         plt.xlabel('Epochs')
         plt.ylabel('Loss')
         plt.title('Training & Validation Loss')
@@ -143,22 +157,20 @@ class ModelTrainer:
 
     def save_model(self, model_dir='saved_models'):
         os.makedirs(model_dir, exist_ok=True)
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        model_path = os.path.join(model_dir, f'model_{timestamp}.h5')
-        scaler_path = os.path.join(model_dir, f'scalers_{timestamp}.joblib')
-
-        self.model.save(model_path)
-        joblib.dump(self.sensor_scalers, scaler_path)
-        return model_path
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        mpath = os.path.join(model_dir, f'model_{ts}.h5')
+        spath = os.path.join(model_dir, f'scalers_{ts}.joblib')
+        self.model.save(mpath)
+        joblib.dump(self.sensor_scalers, spath)
+        return mpath
 
     def load_model(self, model_path):
         self.model = load_model(model_path)
-        model_filename = os.path.basename(model_path)
-        scaler_filename = model_filename.replace('model_', 'scalers_').replace('.h5', '.joblib')
-        scaler_path = os.path.join(os.path.dirname(model_path), scaler_filename)
-
-        if os.path.exists(scaler_path):
-            self.sensor_scalers = joblib.load(scaler_path)
+        base = os.path.basename(model_path)
+        sfile = base.replace('model_', 'scalers_').replace('.h5', '.joblib')
+        spath = os.path.join(os.path.dirname(model_path), sfile)
+        if os.path.exists(spath):
+            self.sensor_scalers = joblib.load(spath)
         else:
-            print(f"경고: 스케일러 파일을 찾을 수 없습니다: {scaler_path}")
+            print(f"경고: 스케일러 파일이 없습니다: {spath}")
         return self.model
