@@ -8,7 +8,7 @@ import joblib
 
 import tensorflow as tf
 from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import LSTM, BatchNormalization, Dropout, Dense
+from tensorflow.keras.layers import LSTM, BatchNormalization, Dropout, Dense, Flatten, GlobalAveragePooling1D
 from tensorflow.keras.optimizers import Adam
 
 from sklearn.preprocessing import MinMaxScaler
@@ -38,20 +38,16 @@ class ModelTrainer:
         self.model          = None
 
     def build_model(self):
-        adam = Adam(learning_rate=3e-4,
+        adam = Adam(learning_rate=2e-5,
                     beta_1=0.9,
                     beta_2=0.999,
                     epsilon=1e-7)
 
         self.model = Sequential([
-            LSTM(128, return_sequences=True,
-                 input_shape=(self.window_size, self.num_features)),
-
-            LSTM(64, return_sequences=True),
-
-            LSTM(32, return_sequences=False),
-            
-            Dense(2)   # [speed, heading_change]
+            LSTM(128, return_sequences=True, input_shape=(self.window_size, self.num_features)),
+            GlobalAveragePooling1D(),    # (batch, 50, 128) → (batch, 128)
+            Dense(64, activation='relu'),
+            Dense(2)                     # speed, heading_change 예측
         ])
 
         self.model.compile(

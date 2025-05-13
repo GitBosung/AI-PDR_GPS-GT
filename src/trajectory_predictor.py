@@ -90,8 +90,8 @@ class TrajectoryPredictor:
             speeds = Y[:, 0] 
             dh     = Y[:, 1] 
         else:
-            speeds = Y[:, 0] * 0.02
-            dh     = Y[:, 1] * 0.02
+            speeds = Y[:, 0] * 0.1
+            dh     = Y[:, 1] * 0.1
             
         #X = self._prepare_windows(df)               # (num_windows, window_size, num_features)
             
@@ -148,8 +148,8 @@ class TrajectoryPredictor:
             pred_speed = Y[:, 0] 
             pred_hc    = Y[:, 1] 
         else:
-            pred_speed = Y[:, 0] * 0.02
-            pred_hc    = Y[:, 1] * 0.02
+            pred_speed = Y[:, 0] * 0.1
+            pred_hc    = Y[:, 1] * 0.1
 
         # 3) GT 누적 궤적
         x_gt = y_gt = hd_gt = 0.0

@@ -100,56 +100,76 @@ class DataProcessor:
         return df
 
     @staticmethod
-    def make_XY_using_dataframe(df, window_size=50, stride=1, freq=50):
+    def make_XY_using_dataframe(df, window_size=50, stride=1):
+        """
+        df: 'Pure Speed', 'Pure Heading Change' 칼럼이 이미 들어있는 DataFrame
+        window_size:  윈도우 크기 (샘플)
+        stride:       X 윈도우를 자를 스트라이드
+        freq:         센서 샘플링 주파수 (Hz)
+        guard:        윈도우 앞뒤로 볼 가드 영역 (샘플)
+        eps:          헤딩 변화 최소 감지 임계치 (rad)
+        """
+        import numpy as np
         from numpy.lib.stride_tricks import sliding_window_view
 
-        logger.info(f"X, Y 생성 시작 (window={window_size}, stride={stride}, freq={freq})")
+        # 전체 시간축
+        t_full = df['Elapsed Time'].values  # (T,)
 
-        t_full = df['Elapsed Time'].values
+        # 1) 1초(비중첩) 윈도우 단위 레이블링
+        speed = df['Pure Speed'].values               # (T,)
+        hc    = df['Pure Heading Change'].values      # (T,)
+        
+        real_speed = []
+        real_heading = []
+        
+        for i in range(50, len(speed), 50):
+            max_speed = 0
+            max_heading = 0
+            for j in range(i-5, i+5):
+                if speed[j] > max_speed:
+                    max_speed = speed[j]
+                if abs(hc[j]) > max_heading:
+                    max_heading = abs(hc[j])
+            real_speed.append(max_speed)
+            real_heading.append(max_heading)
+            
+        real_speed = np.array(real_speed)
+        real_heading = np.array(real_heading)
+        
+        t_orig = np.arange(0, len(real_speed))
+        t_new = np.arange(0, len(real_speed), 0.02)
+        
+        f = PchipInterpolator(t_orig, real_speed)
+        real_speed_interp = f(t_new)
+        
+        f = PchipInterpolator(t_orig, real_heading)
+        real_heading_interp = f(t_new)
+        
+        v_full = real_speed_interp
+        hc_full = real_heading_interp
+        
+        Y_full = np.stack([v_full, hc_full], axis=1)  # (T,2)
+        
 
-        # Speed 보간
-        t_spd = df.loc[df['Pure Speed'] != 0, 'Elapsed Time'].values
-        v_spd = df.loc[df['Pure Speed'] != 0, 'Pure Speed'].values
-        spd_pchip = PchipInterpolator(t_spd, v_spd, extrapolate=False)
-        v_full    = np.nan_to_num(spd_pchip(t_full), nan=0.0)
 
-        # Heading Change 보간 (앵커 포함)
-        t_hc = df.loc[df['Pure Heading Change'] != 0, 'Elapsed Time'].values
-        hc   = df.loc[df['Pure Heading Change'] != 0, 'Pure Heading Change'].values
-
-        t_start, t_end = t_full[0], t_full[-1]
-        t_hc_aug = np.concatenate(([t_start], t_hc, [t_end]))
-        hc_aug   = np.concatenate(([0.0],   hc,   [0.0]))
-
-        hc_pchip  = UnivariateSpline(t_hc_aug, hc_aug, k=2, s=0.01)
-        hc_full   = np.nan_to_num(hc_pchip(t_full), nan=0.0)
-
-        eps, delta = 0.1, 0.1
-        weight     = 0.5 * (1 + np.tanh((np.abs(hc_full) - eps) / delta))
-        hc_gated   = weight * hc_full
-
-        Y_full = np.stack((v_full, hc_gated), axis=1)
-
+        # 3) 슬라이딩 윈도우로 X, Y 매칭
         sensor_cols = [
             'Accelerometer x','Accelerometer y','Accelerometer z',
             'Gyroscope x','Gyroscope y','Gyroscope z',
             'Acc_Norm','Gyro_Norm',
         ]
-        sensor_data = df[sensor_cols].values
+        data = df[sensor_cols].values.astype(np.float32)  # (T,8)
 
-        min_len     = min(len(sensor_data), len(Y_full))
-        sensor_data = sensor_data[:min_len]
-        Y_full      = Y_full[:min_len]
-
-        windows = sliding_window_view(
-            sensor_data,
-            window_shape=(window_size, sensor_data.shape[1])
-        ).squeeze(1)
+        # X: (num_windows, window_size, num_features)
+        windows = sliding_window_view(data, (window_size, data.shape[1])).squeeze(1)
         X = windows[::stride]
-        Y = Y_full[window_size - 1 :: stride]
+        
 
-        X = X.astype(np.float32)
-        Y = Y.astype(np.float32)
-        logger.info(f"X, Y 생성 완료: X={X.shape}, Y={Y.shape}")
+        n_windows = X.shape[0]
+        Y = Y_full[:n_windows]  # shape = (n_windows, 2)
+        
+        print(len(Y))
+        print(len(X))
 
+        logger.info(f"make_XY 완료: X={X.shape}, Y={Y.shape}")
         return X, Y
