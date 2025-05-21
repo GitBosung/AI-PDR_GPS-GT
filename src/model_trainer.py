@@ -1,54 +1,17 @@
 import numpy as np
 import os
-import logging
 from datetime import datetime
 import joblib
 
 import tensorflow as tf
 from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import LSTM, Dense, GlobalAveragePooling1D, Dropout, BatchNormalization
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
+from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization, LayerNormalization
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.losses import Loss
 
-from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, Normalizer
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
-
-logger = logging.getLogger(__name__)
-
-
-class EuclideanWeightedLoss(Loss):
-    """
-    ℓ = Σ (||Δl̃ - Δl||^2 + κ * ||Δψ̃ - Δψ||^2)
-    
-    - y_true, y_pred shape = (batch, 2)  →  [Δl, Δψ]
-    - reduction 기본값은 "auto" (배치 평균)입니다.
-    """
-    def __init__(self, kappa=2.0,
-                 reduction=tf.keras.losses.Reduction.AUTO,
-                 name="euclidean_weighted_loss"):
-        super().__init__(reduction=reduction, name=name)
-        self.kappa = kappa
-
-    def call(self, y_true, y_pred):
-        # 1) 각 성분 분리
-        delta_l_true   = y_true[..., 0]   # shape = (batch,)
-        delta_psi_true = y_true[..., 1]
-        delta_l_pred   = y_pred[..., 0]
-        delta_psi_pred = y_pred[..., 1]
-
-        # 2) 제곱 오차
-        se_l   = tf.square(delta_l_pred   - delta_l_true)
-        se_psi = tf.square(delta_psi_pred - delta_psi_true)
-
-        # 3) 가중합: 논문 식대로 κ 곱해주기
-        loss_sample = se_l + self.kappa * se_psi  # shape = (batch,)
-
-        # 4) reduction: 기본적으로 배치 평균으로 반환
-        return tf.reduce_mean(loss_sample)
-
-
 class ModelTrainer:
     """
     LSTM 기반 모델 구축·학습·평가·저장
@@ -78,25 +41,21 @@ class ModelTrainer:
 
         self.model = Sequential([
             LSTM(128, return_sequences=True, input_shape=(self.window_size, self.num_features)),
-            #BatchNormalization(),
-            # Dropout(0.3),
+            LayerNormalization(),
+            Dropout(0.3),
 
             LSTM(64, return_sequences=True),
-            #BatchNormalization(),
-            # Dropout(0.3),
+            LayerNormalization(),
+            Dropout(0.3),
 
             LSTM(32, return_sequences=False),
-            # GlobalAveragePooling1D(),
-            
-            Dense(2)  # speed, heading_change 예측
+            Dense(2)
         ])
 
-        loss_fn = EuclideanWeightedLoss()
 
         self.model.compile(
             optimizer=adam,
             loss='mse',
-            #loss='mse',
             metrics=['mae']
         )
         return self.model

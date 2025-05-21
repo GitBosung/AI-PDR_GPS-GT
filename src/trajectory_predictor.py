@@ -157,6 +157,14 @@ class TrajectoryPredictor:
         # 3) GT 절대 궤적 (E,N) -> 상대 좌표 (시작점 원점)
         E = df['E'].values; N = df['N'].values
         E_rel = E - E[0]; N_rel = N - N[0]
+        
+        E = df['E'].values;  N = df['N'].values
+        E_rel = E - E[0];    N_rel = N - N[0]
+        theta0 = np.arctan2(N_rel[1]-N_rel[0], E_rel[1]-E_rel[0])
+        cos0, sin0 = np.cos(-theta0), np.sin(-theta0)
+        E_rot =  E_rel * cos0 - N_rel * sin0
+        N_rot =  E_rel * sin0 + N_rel * cos0
+
 
         # 4) pred 누적 궤적 계산
         x_pr = y_pr = hd_pr = 0.0
@@ -169,7 +177,7 @@ class TrajectoryPredictor:
 
         # 5-1) 궤적 비교 플롯
         plt.figure(figsize=(10, 8))
-        plt.plot(E_rel, N_rel,      'b--',  label='GT Trajectory', linewidth=2)
+        plt.plot(E_rot, N_rot,      'b-',  label='GT Trajectory', linewidth=2)
         plt.plot(tx_pr, ty_pr,     'r-', label='Pred Trajectory', linewidth=2)
         plt.scatter([0], [0], c='green', s=100, label='Start')
         plt.title('GT vs Predicted Trajectory')
