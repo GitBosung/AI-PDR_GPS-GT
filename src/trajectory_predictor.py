@@ -131,73 +131,66 @@ class TrajectoryPredictor:
         return Y, (traj_x, traj_y)
 
     def compare_trajectories(self, df: pd.DataFrame, plag_1Hz: bool = False):
-        # 1) GT 궤적
-        gt_mask_s = df['Pure Speed'] != 0
-        gt_speed  = df.loc[gt_mask_s, 'Pure Speed'].values
-        gt_mask_h = df['Pure Heading Change'] != 0
-        gt_hc     = np.unwrap(df.loc[gt_mask_h, 'Pure Heading Change'].values)
+        # 1) predict
+        if plag_1Hz:
+            X = self._prepare_windows_1Hz(df)
+            stride = 50
+        else:
+            X = self._prepare_windows(df)
+            stride = 5
+
+        Y = self.model.predict(X)
 
         if plag_1Hz:
-            X = self._prepare_windows_1Hz(df)               # (num_windows, window_size, num_features)
-        else:
-            X = self._prepare_windows(df)    
-            # (num_windows, window_size, num_features)
-        Y = self.model.predict(X) 
-        
-        if plag_1Hz:
-            pred_speed = Y[:, 0] 
-            pred_hc    = Y[:, 1] 
+            pred_speed = Y[:, 0]
+            pred_hc    = Y[:, 1]
         else:
             pred_speed = Y[:, 0] * 0.1
             pred_hc    = Y[:, 1] * 0.1
 
-        # 3) GT 누적 궤적
-        x_gt = y_gt = hd_gt = 0.0
-        tx_gt, ty_gt = [x_gt], [y_gt]
-        for s, dh in zip(gt_speed, gt_hc):
-            hd_gt += dh
-            x_gt += s * np.cos(hd_gt)
-            y_gt += s * np.sin(hd_gt)
-            tx_gt.append(x_gt); ty_gt.append(y_gt)
+        # 2) GT 속도 변화를 stride 간격으로 샘플링해서 pred 길이에 맞추기
+        gt_speed_full = df['dist_change'].values * 0.1
+        # 윈도우 끝 지점 기준: stride-1, 2*stride-1, ...
+        gt_speed_ws = gt_speed_full[stride - 1 :: stride]
+        gt_speed_ws = gt_speed_ws[:len(pred_speed)]
 
-        # 4) Pred 누적 궤적
+        # 3) GT 절대 궤적 (E,N) -> 상대 좌표 (시작점 원점)
+        E = df['E'].values; N = df['N'].values
+        E_rel = E - E[0]; N_rel = N - N[0]
+
+        # 4) pred 누적 궤적 계산
         x_pr = y_pr = hd_pr = 0.0
         tx_pr, ty_pr = [x_pr], [y_pr]
         for s, dh in zip(pred_speed, pred_hc):
             hd_pr += dh
-            x_pr += s * np.cos(hd_pr)
-            y_pr += s * np.sin(hd_pr)
+            x_pr  += s * np.cos(hd_pr)
+            y_pr  += s * np.sin(hd_pr)
             tx_pr.append(x_pr); ty_pr.append(y_pr)
 
-        # 5) 궤적 비교 시각화
-        plt.figure(figsize=(10,8))
-        plt.plot(tx_gt, ty_gt, 'b-o', label='GT', alpha=0.7, markersize=4)
-        plt.plot(tx_pr, ty_pr, 'r-o', label='Pred', alpha=0.7, markersize=4)
-        plt.plot(tx_gt[0], ty_gt[0], 'go', markersize=8, label='Start')
-        plt.plot(tx_gt[-1], ty_gt[-1], 'bo', markersize=8, label='GT End')
-        plt.plot(tx_pr[-1], ty_pr[-1], 'ro', markersize=8, label='Pred End')
+        # 5-1) 궤적 비교 플롯
+        plt.figure(figsize=(10, 8))
+        plt.plot(E_rel, N_rel,      'b--',  label='GT Trajectory', linewidth=2)
+        plt.plot(tx_pr, ty_pr,     'r-', label='Pred Trajectory', linewidth=2)
+        plt.scatter([0], [0], c='green', s=100, label='Start')
         plt.title('GT vs Predicted Trajectory')
         plt.xlabel('Easting (m)'); plt.ylabel('Northing (m)')
-        plt.legend(); plt.grid(); plt.axis('equal'); plt.show()
+        plt.legend(); plt.grid(); plt.axis('equal')
+        plt.show()
 
-        # 6) 속도·헤딩 오차 플롯
-        sp_err = np.abs(gt_speed - pred_speed[:len(gt_speed)])
-        hd_err = np.abs(np.degrees(gt_hc - pred_hc[:len(gt_hc)]))
+        # 5-2) 속도 비교 플롯
+        plt.figure(figsize=(10, 5))
+        plt.plot(gt_speed_ws,     'b--',  label='GT Speed (downsampled)')
+        plt.plot(pred_speed,      'r-', label='Pred Speed')
+        plt.title('GT vs Predicted Speed')
+        plt.xlabel('Window Index'); plt.ylabel('Speed (m/s)')
+        plt.legend(); plt.grid(); plt.show()
 
-        fig, axs = plt.subplots(2,2, figsize=(12,10))
-        axs[0,0].plot(gt_speed, '-o', label='GT', markersize=3)
-        axs[0,0].plot(pred_speed, '-o', label='Pred', markersize=3)
-        axs[0,0].set_title('Speed Comparison'); axs[0,0].legend(); axs[0,0].grid()
-
-        axs[0,1].plot(np.degrees(gt_hc), '-o', label='GT', markersize=3)
-        axs[0,1].plot(np.degrees(pred_hc), '-o', label='Pred', markersize=3)
-        axs[0,1].set_title('Heading Change Comparison'); axs[0,1].legend(); axs[0,1].grid()
-
-        axs[1,0].plot(sp_err, '-o', markersize=3)
-        axs[1,0].set_title('Speed Error'); axs[1,0].grid()
-        axs[1,1].plot(hd_err, '-o', markersize=3)
-        axs[1,1].set_title('Heading Error (deg)'); axs[1,1].grid()
-
-        plt.tight_layout(); plt.axis('equal'); plt.show()
-
-        return (tx_gt, ty_gt), (tx_pr, ty_pr), sp_err, hd_err
+        # 5-3) 헤딩 변화량 비교 플롯
+        plt.figure(figsize=(10, 5))
+        gt_hc_full = df['heading_diff'].values * 0.1
+        gt_hc_ws   = gt_hc_full[stride - 1 :: stride][:len(pred_hc)]
+        plt.plot(gt_hc_ws,      'b--',  label='GT Heading Change')
+        plt.plot(pred_hc,       'r-', label='Pred Heading Change')
+        plt.title('GT vs Predicted Heading Change')
+        plt.xlabel('Window Index'); plt.ylabel('Heading Change (rad)')
+        plt.legend(); plt.grid(); plt.show()
