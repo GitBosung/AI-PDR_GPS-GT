@@ -13,7 +13,7 @@ np.random.seed(SEED)
 tf.random.set_seed(SEED)
 
 # 현재 main.py 파일의 디렉토리를 기준으로 프로젝트 루트 경로 설정
-# BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+#BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 #ipynb 환경인 경우 해당 코드를 사용함
 BASE_DIR = os.getcwd()
 

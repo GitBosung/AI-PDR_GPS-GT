@@ -1,76 +1,45 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import pandas as pd
-from sklearn.preprocessing import MinMaxScaler
+import matplotlib.pyplot as plt
+from pyproj import Proj
+import math
 
 class TrajectoryPredictor:
     """
-    - 학습된 모델(model), sensor_scalers(dict of sklearn Scaler), window_size를 받아
-      센서 데이터를 윈도우별로 스케일링 → 예측 → 시각화 수행
+    - 학습된 모델(model), sensor_scalers(dict), y_speed_scaler, y_hc_scaler, window_size를 받아
+      센서 데이터를 윈도우별로 스케일링 → 예측(스케일 복원) → 시각화 수행
     """
-    def __init__(self, model, sensor_scalers: dict, window_size=50):
+    def __init__(self, model, sensor_scalers: dict, y_speed_scaler, y_hc_scaler, window_size=50):
         self.model = model
         self.sensor_scalers = sensor_scalers
+        self.y_speed_scaler = y_speed_scaler
+        self.y_hc_scaler    = y_hc_scaler
         self.window_size = window_size
 
-    def _prepare_windows(self, df: pd.DataFrame) -> np.ndarray:
+    def _prepare_windows(self, df: pd.DataFrame, stride=5) -> np.ndarray:
         """
         DataFrame df에서 sensor_cols 열을 window_size 단위로 잘라
-        각 윈도우마다 전역 scaler만 적용 후 3D numpy array로 반환
+        전역 scaler(self.sensor_scalers)만 적용 후 3D numpy array 반환
         (shape = [num_windows, window_size, num_features])
         """
         sensor_cols = [
-            'Accelerometer x','Accelerometer y','Accelerometer z',
-            'Gyroscope x','Gyroscope y','Gyroscope z',
-            'Acc_Norm','Gyro_Norm',
+            'Accelerometer x', 'Accelerometer y', 'Accelerometer z',
+            'Gyroscope x',    'Gyroscope y',    'Gyroscope z',
+            'Acc_Norm',       'Gyro_Norm',
         ]
         windows = []
+        total_len = len(df)
 
-        # non-overlap stride = window_size
-        for start in range(0, len(df) - self.window_size + 1, 5):
+        for start in range(0, total_len - self.window_size + 1, stride):
             sub_df = df[sensor_cols].iloc[start : start + self.window_size].astype(np.float32)
-            arr = sub_df.values  # (window_size, num_features)
+            arr = sub_df.values  # shape = (window_size, num_features)
             scaled = np.zeros_like(arr, dtype=np.float32)
 
             for idx, col in enumerate(sensor_cols):
-                # 전역으로 학습된 scaler 적용
-                scaler = self.sensor_scalers.get(col)
-                if scaler:
+                scaler = self.sensor_scalers.get(col, None)
+                if scaler is not None:
                     scaled[:, idx] = scaler.transform(arr[:, idx].reshape(-1, 1)).ravel()
                 else:
-                    # scaler 없으면 원본 값을 그대로 사용
-                    scaled[:, idx] = arr[:, idx]
-
-            windows.append(scaled)
-            
-        return np.array(windows, dtype=np.float32)
-            
-    def _prepare_windows_1Hz(self, df: pd.DataFrame) -> np.ndarray:
-        """
-        DataFrame df에서 sensor_cols 열을 window_size 단위로 잘라
-        각 윈도우마다 전역 scaler만 적용 후 3D numpy array로 반환
-        (shape = [num_windows, window_size, num_features])
-        """
-        sensor_cols = [
-            'Accelerometer x','Accelerometer y','Accelerometer z',
-            'Gyroscope x','Gyroscope y','Gyroscope z',
-            'Acc_Norm','Gyro_Norm',
-        ]
-        windows = []
-
-        # non-overlap stride = window_size
-        for start in range(0, len(df) - self.window_size + 1, 50):
-            sub_df = df[sensor_cols].iloc[start : start + self.window_size].astype(np.float32)
-            arr = sub_df.values  # (window_size, num_features)
-            scaled = np.zeros_like(arr, dtype=np.float32)
-
-            for idx, col in enumerate(sensor_cols):
-                # 전역으로 학습된 scaler 적용
-                scaler = self.sensor_scalers.get(col)
-                if scaler:
-                    scaled[:, idx] = scaler.transform(arr[:, idx].reshape(-1, 1)).ravel()
-                else:
-                    # scaler 없으면 원본 값을 그대로 사용
                     scaled[:, idx] = arr[:, idx]
 
             windows.append(scaled)
@@ -78,127 +47,245 @@ class TrajectoryPredictor:
         return np.array(windows, dtype=np.float32)
 
     def predict_and_plot_trajectory(self, df: pd.DataFrame, plag_1Hz: bool = False):
-        
-        if plag_1Hz:
-            X = self._prepare_windows_1Hz(df)               # (num_windows, window_size, num_features)
-        else:
-            X = self._prepare_windows(df)    
-            # (num_windows, window_size, num_features)
-        Y = self.model.predict(X) 
-        
-        if plag_1Hz:
-            speeds = Y[:, 0] 
-            dh     = Y[:, 1] 
-        else:
-            speeds = Y[:, 0] * 0.1
-            dh     = Y[:, 1] * 0.1
-            
-        #X = self._prepare_windows(df)               # (num_windows, window_size, num_features)
-            
+        """
+        df에는 load_and_preprocess_csv 로 얻은 원본 50Hz DataFrame이 들어온다고 가정.
+        1) plag_1Hz=False → stride=5, plag_1Hz=True → stride=50 로 윈도우 생성하여 예측 (스케일 복원 포함)
+        2) 예측된 속도·헤딩을 plot
+        3) 예측 궤적(accumulate) plot
+        """
+        stride = 50 if plag_1Hz else 5
+        X = self._prepare_windows(df, stride=stride)  # shape = (num_windows, window_size, num_features)
 
-        # Speed plot
-        plt.figure(figsize=(8,4))
-        plt.plot(speeds, '-o', label='Speed (m/s)', markersize=4)
-        plt.title('Predicted Speed')
-        plt.xlabel('Window Index'); plt.ylabel('Speed (m/s)')
-        plt.grid(True); plt.legend(); plt.show()
+        # 1) 모델 예측 (스케일된 Y_pred_scaled)
+        Y_pred_scaled = self.model.predict(X)  # shape = (num_windows, 2)
 
-        # Heading Change plot
-        plt.figure(figsize=(8,4))
-        plt.plot(np.degrees(dh), '-o', label='Heading Change (deg)', markersize=4)
-        plt.title('Predicted Heading Change')
-        plt.xlabel('Window Index'); plt.ylabel('Heading Change (deg)')
-        plt.grid(True); plt.legend(); plt.show()
+        # 2) 스케일 복원
+        #    - 첫 번째 열은 속도, 두 번째 열은 헤딩 변화량
+        pred_speed = self.y_speed_scaler.inverse_transform(Y_pred_scaled[:, 0].reshape(-1, 1)).ravel()
+        pred_hc    = self.y_hc_scaler.inverse_transform(Y_pred_scaled[:, 1].reshape(-1, 1)).ravel()
 
-        # 누적 궤적 계산
+        # 플래그에 따라 보정 필요시 스케일(0.1) 곱하기
+        if not plag_1Hz:
+            # 예: 모델이 10배로 학습했다면 0.1 곱
+            pred_speed *= 0.1
+            pred_hc    *= 0.1
+
+        # -------------------------------
+        # 속도 예측 그래프
+        # -------------------------------
+        plt.figure(figsize=(8, 4))
+        plt.plot(pred_speed, '-o', label='Predicted Speed (m/s)', markersize=4)
+        plt.title(f'Predicted Speed (stride={stride})')
+        plt.xlabel('Window Index')
+        plt.ylabel('Speed (m/s)')
+        plt.grid(True)
+        plt.legend()
+        plt.show()
+
+        # -------------------------------
+        # 헤딩 변화 예측 그래프 (deg 단위)
+        # -------------------------------
+        plt.figure(figsize=(8, 4))
+        plt.plot(np.degrees(pred_hc*10), '-o', label='Predicted Heading Change (deg)', markersize=4)
+        plt.title(f'Predicted Heading Change (stride={stride})')
+        plt.xlabel('Window Index')
+        plt.ylabel('Heading Change (deg)')
+        plt.grid(True)
+        plt.legend()
+        plt.show()
+
+        # -------------------------------
+        # Predicted 궤적 누적 적분
+        # -------------------------------
         x = y = heading = 0.0
         traj_x, traj_y = [x], [y]
-        for s, delta_h in zip(speeds, dh):
-            heading += delta_h
+        for s, dh in zip(pred_speed, pred_hc):
+            heading += dh
             x += s * np.cos(heading)
             y += s * np.sin(heading)
-            traj_x.append(x); traj_y.append(y)
+            traj_x.append(x)
+            traj_y.append(y)
 
-        # 궤적 시각화
-        plt.figure(figsize=(8,6))
+        # -------------------------------
+        # Predicted Movement Trajectory plot
+        # -------------------------------
+        plt.figure(figsize=(8, 6))
         plt.plot(traj_x, traj_y, 'b-o', alpha=0.7, markersize=4, label='Predicted Path')
-        plt.plot(traj_x[0], traj_y[0], 'go', markersize=8, label='Start')
-        plt.plot(traj_x[-1], traj_y[-1], 'ro', markersize=8, label='End')
-        plt.title('Predicted Movement Trajectory')
-        plt.xlabel('Easting (m)'); plt.ylabel('Northing (m)')
-        plt.grid(True); plt.axis('equal'); plt.legend(); plt.axis('equal'); plt.show()
+        plt.scatter([traj_x[0]], [traj_y[0]], c='green', s=80, label='Start')
+        plt.scatter([traj_x[-1]], [traj_y[-1]], c='red',   s=80, label='End')
+        plt.title(f'Predicted Movement Trajectory (stride={stride})')
+        plt.xlabel('Easting (m)')
+        plt.ylabel('Northing (m)')
+        plt.grid(True)
+        plt.axis('equal')
+        plt.legend()
+        plt.show()
 
-        return Y, (traj_x, traj_y)
+        return np.vstack([pred_speed, pred_hc]).T, (traj_x, traj_y)
 
     def compare_trajectories(self, df: pd.DataFrame, plag_1Hz: bool = False):
-        # 1) predict
-        if plag_1Hz:
-            X = self._prepare_windows_1Hz(df)
-            stride = 50
-        else:
-            X = self._prepare_windows(df)
-            stride = 5
+        """
+        1) df와 Y를 입력받아서, model.predict 결과와 GT(Y)를 비교
+           - df: load_and_preprocess_csv로 얻은 DataFrame (50Hz 샘플링)
+           - Y : shape=(n_windows, 2) 형태의 GT 값 ([speed_1, heading_1])이지만,
+                 실제로 여기서는 df에 있는 컬럼 'speed_1', 'heading_1'을 사용하므로
+                 길이가 50Hz(샘플 수) 만큼 존재한다 가정
+        2) plag_1Hz=False → stride=5, plag_1Hz=True → stride=50 로 윈도우 생성
+        3) pred_speed, pred_hc 예측 → 스케일 복원
+        4) GT 속도·헤딩 vs 예측 속도·헤딩 비교 (길이 맞춤)
+        5) GT Trajectory vs Pred Trajectory 비교
+        """
 
-        Y = self.model.predict(X)
+        # ===== 1) stride 결정 및 윈도우 시작 인덱스 목록 생성 =====
+        stride = 50 if plag_1Hz else 5
+        window_size = self.window_size
 
-        if plag_1Hz:
-            pred_speed = Y[:, 0]
-            pred_hc    = Y[:, 1]
-        else:
-            pred_speed = Y[:, 0] * 0.1
-            pred_hc    = Y[:, 1] * 0.1
+        # 원본 df 길이
+        total_len = len(df)
 
-        # 2) GT 속도 변화를 stride 간격으로 샘플링해서 pred 길이에 맞추기
-        gt_speed_full = df['dist_change'].values * 0.1
-        # 윈도우 끝 지점 기준: stride-1, 2*stride-1, ...
-        gt_speed_ws = gt_speed_full[stride - 1 :: stride]
-        gt_speed_ws = gt_speed_ws[:len(pred_speed)]
+        # 윈도우가 생성될 때 사용된 start index 행렬: 0, stride, 2*stride, ... (끝까지)
+        # 단, 마지막 윈도우는 start + window_size <= total_len 이여야 함
+        start_indices = list(range(0, total_len - window_size + 1, stride))
 
-        # 3) GT 절대 궤적 (E,N) -> 상대 좌표 (시작점 원점)
-        E = df['E'].values; N = df['N'].values
-        E_rel = E - E[0]; N_rel = N - N[0]
+        # ===== 2) 윈도우 단위 예측 =====
+        X = self._prepare_windows(df, stride=stride)   # (num_windows, window_size, num_features)
+        Y_pred_scaled = self.model.predict(X)           # (num_windows, 2)
+
+        # 스케일 복원
+        pred_speed = self.y_speed_scaler.inverse_transform(
+            Y_pred_scaled[:, 0].reshape(-1, 1)
+        ).ravel()
+        pred_hc = self.y_hc_scaler.inverse_transform(
+            Y_pred_scaled[:, 1].reshape(-1, 1)
+        ).ravel()
+
+        if not plag_1Hz:
+            pred_speed *= 0.1
+            pred_hc    *= 0.1
+
+        # ===== 3) GT를 윈도우 단위로 추출하여 pred와 동일한 길이로 맞춤 =====
+        # df['speed_1'], df['heading_1']는 50Hz로 샘플링된 GT값 배열(길이=total_len)
+        # start_indices 길이 == pred_speed 길이 이므로, 각 윈도우 시작 인덱스에 대응하는 GT를 뽑음
+        # (필요하다면 윈도우 끝 지점 또는 중앙 지점을 기준으로 해도 무방. 여기서는 편의상 윈도우 시작 지점을 사용)
+
+        # === 수정된 부분 ===
+        # start_indices가 [0, 5, 10, 15, ...] 형태이므로, 해당 인덱스만큼 GT 값을 뽑아 길이를 맞춘다.
+        gt_speed_windowed = df['speed_1'].iloc[start_indices].values     # shape = (num_windows,)
+        gt_hc_windowed    = df['heading_1'].iloc[start_indices].values   # shape = (num_windows,)
+        # === 여기까지 수정된 부분 ===
+
+        # -------------------------------
+        # 4) GT Speed vs Pred Speed 비교 (두 배열 길이 동일)
+        # -------------------------------
+        plt.figure(figsize=(10, 5))
+        plt.plot(gt_speed_windowed,  'b--', label='GT Speed (windowed)')
+        plt.plot(pred_speed * 10,    'r-',  label='Pred Speed (windowed)')
+        plt.title(f'GT vs Predicted Speed (stride={stride})')
+        plt.xlabel('Window Index')
+        plt.ylabel('Speed (m/s)')
+        plt.legend()
+        plt.grid()
+        plt.show()
+
+        # -------------------------------
+        # 5) GT Heading Change vs Pred Heading Change 비교 (두 배열 길이 동일)
+        # -------------------------------
+        plt.figure(figsize=(10, 5))
+        plt.plot(gt_hc_windowed,   'b--', label='GT Heading Change (rad, windowed)')
+        plt.plot(pred_hc * 10,     'r-',  label='Pred Heading Change (rad, windowed)')
+        plt.title(f'GT vs Predicted Heading Change (stride={stride})')
+        plt.xlabel('Window Index')
+        plt.ylabel('Heading Change (rad)')
+        plt.legend()
+        plt.grid()
+        plt.show()
+
+        # -------------------------------
+        # 6) GT Trajectory 계산 (상대 좌표)
+        #    - df['E'], df['N']는 load_and_preprocess_csv에서 계산됨
+        # -------------------------------
         
-        E = df['E'].values;  N = df['N'].values
-        E_rel = E - E[0];    N_rel = N - N[0]
-        theta0 = np.arctan2(N_rel[1]-N_rel[0], E_rel[1]-E_rel[0])
-        cos0, sin0 = np.cos(-theta0), np.sin(-theta0)
-        E_rot =  E_rel * cos0 - N_rel * sin0
-        N_rot =  E_rel * sin0 + N_rel * cos0
+        M = len(df)                     # 예: 50Hz 데이터 개수
+        n_windows_Hz1 = M // 50         # 초당 1개 대표 좌표 개수
 
+        df_ori_e = []
+        df_ori_n = []
+        for i in range(n_windows_Hz1):
+            center_idx = i * 50 + 25    # 가운데 인덱스 (0~49 → 25, 50~99 → 75, ...)
+            if center_idx < M:
+                df_ori_e.append(df['E'].iloc[center_idx])
+                df_ori_n.append(df['N'].iloc[center_idx])
+            else:
+                # 만약 마지막 윈도우가 50미만 남았으면 마지막 샘플 사용
+                df_ori_e.append(df['E'].iloc[-1])
+                df_ori_n.append(df['N'].iloc[-1])
 
-        # 4) pred 누적 궤적 계산
-        x_pr = y_pr = hd_pr = 0.0
+        # N: 1Hz 대표 좌표 개수
+        N = len(df_ori_e)
+        
+        
+        E = df_ori_e
+        N = df_ori_n
+        dx = E[1] - E[0]
+        dy = N[1] - N[0]
+        
+        theta = math.atan2(dy, dx)
+        cos_a = math.cos(-theta)
+        sin_a = math.sin(-theta)
+        R = np.array([[cos_a, -sin_a],
+                    [sin_a,  cos_a]])
+
+        # 4) 원점(초기점)을 빼서 상대좌표로 만든 뒤 회전
+        coords = np.vstack((
+            E - E[0],    # East 방향 상대좌표
+            N - N[0]     # North 방향 상대좌표
+        ))
+        rotated = R @ coords
+
+        e_corr = rotated[0, :]
+        n_corr = rotated[1, :]
+
+        
+        # theta0 = np.arctan2(N_rel[1] - N_rel[0], E_rel[1] - E_rel[0])
+        # cos0, sin0 = np.cos(-theta0), np.sin(-theta0)
+        # E_rot = E_rel * cos0 - N_rel * sin0
+        # N_rot = E_rel * sin0 + N_rel * cos0
+
+        # -------------------------------
+        # 7) Pred Trajectory 누적 적분
+        # -------------------------------
+        hd_pr = 0.0
+        x_pr = 0.0
+        y_pr = 0.0
         tx_pr, ty_pr = [x_pr], [y_pr]
         for s, dh in zip(pred_speed, pred_hc):
             hd_pr += dh
-            x_pr  += s * np.cos(hd_pr)
-            y_pr  += s * np.sin(hd_pr)
-            tx_pr.append(x_pr); ty_pr.append(y_pr)
+            x_pr += s * np.cos(hd_pr)
+            y_pr += s * np.sin(hd_pr)
+            tx_pr.append(x_pr)
+            ty_pr.append(y_pr)
 
-        # 5-1) 궤적 비교 플롯
+        # -------------------------------
+        # 8) GT vs Pred Trajectory 비교 플롯
+        # -------------------------------
         plt.figure(figsize=(10, 8))
-        plt.plot(E_rot, N_rot,      'b-',  label='GT Trajectory', linewidth=2)
-        plt.plot(tx_pr, ty_pr,     'r-', label='Pred Trajectory', linewidth=2)
+        plt.plot(e_corr,        n_corr,   'b-', label='GT Trajectory',   linewidth=2)
+        plt.plot(tx_pr,        ty_pr,   'r-', label='Pred Trajectory', linewidth=2)
         plt.scatter([0], [0], c='green', s=100, label='Start')
-        plt.title('GT vs Predicted Trajectory')
-        plt.xlabel('Easting (m)'); plt.ylabel('Northing (m)')
-        plt.legend(); plt.grid(); plt.axis('equal')
+        plt.title(f'GT vs Predicted Trajectory (stride={stride})')
+        plt.xlabel('Easting (m)')
+        plt.ylabel('Northing (m)')
+        plt.legend()
+        plt.grid()
+        plt.axis('equal')
         plt.show()
 
-        # 5-2) 속도 비교 플롯
-        plt.figure(figsize=(10, 5))
-        plt.plot(gt_speed_ws,     'b--',  label='GT Speed (downsampled)')
-        plt.plot(pred_speed,      'r-', label='Pred Speed')
-        plt.title('GT vs Predicted Speed')
-        plt.xlabel('Window Index'); plt.ylabel('Speed (m/s)')
-        plt.legend(); plt.grid(); plt.show()
-
-        # 5-3) 헤딩 변화량 비교 플롯
-        plt.figure(figsize=(10, 5))
-        gt_hc_full = df['heading_diff'].values * 0.1
-        gt_hc_ws   = gt_hc_full[stride - 1 :: stride][:len(pred_hc)]
-        plt.plot(gt_hc_ws,      'b--',  label='GT Heading Change')
-        plt.plot(pred_hc,       'r-', label='Pred Heading Change')
-        plt.title('GT vs Predicted Heading Change')
-        plt.xlabel('Window Index'); plt.ylabel('Heading Change (rad)')
-        plt.legend(); plt.grid(); plt.show()
+        # 결과를 딕셔너리 형태로 반환
+        return {
+            'gt_speed':        gt_speed_windowed,      # 길이가 pred와 동일
+            'pred_speed':      pred_speed,
+            'gt_hc':           gt_hc_windowed,         # 길이가 pred와 동일
+            'pred_hc':         pred_hc,
+            'gt_traj':         (e_corr, n_corr),
+            'pred_traj':       (tx_pr, ty_pr),
+        }
