@@ -6,43 +6,61 @@ import math
 
 class TrajectoryPredictor:
     """
-    - 학습된 모델(model), sensor_scalers(dict), y_speed_scaler, y_hc_scaler, window_size를 받아
-      센서 데이터를 윈도우별로 스케일링 → 예측(스케일 복원) → 시각화 수행
+    - 모델(model), sensor_scalers, y_speed_scaler, y_hc_scaler, window_size를 받아
+      DataProcessor로 준비된 df에서 윈도우 생성 → 통계 피처 계산 → 스케일 → 예측 → 복원 → 시각화
     """
-    def __init__(self, model, sensor_scalers: dict, y_speed_scaler, y_hc_scaler, window_size=50):
+
+    def __init__(self, model, sensor_scalers, y_speed_scaler, y_hc_scaler, window_size=50):
         self.model = model
         self.sensor_scalers = sensor_scalers
         self.y_speed_scaler = y_speed_scaler
-        self.y_hc_scaler    = y_hc_scaler
+        self.y_hc_scaler = y_hc_scaler
         self.window_size = window_size
 
-    def _prepare_windows(self, df: pd.DataFrame, stride=5) -> np.ndarray:
+    def _prepare_windows(self, df: pd.DataFrame, stride: int = 5) -> np.ndarray:
         """
-        DataFrame df에서 sensor_cols 열을 window_size 단위로 잘라
-        전역 scaler(self.sensor_scalers)만 적용 후 3D numpy array 반환
-        (shape = [num_windows, window_size, num_features])
+        df: DataProcessor.load_and_preprocess_csv로 처리된 DataFrame
+        stride: 윈도우 이동 간격
+        returns: shape = (num_windows, window_size, num_features=38)
         """
-        sensor_cols = [
-            'Accelerometer x', 'Accelerometer y', 'Accelerometer z',
-            'Gyroscope x',    'Gyroscope y',    'Gyroscope z',
-            'Acc_Norm',       'Gyro_Norm',
-        ]
+        # 1) 스무딩 재적용 (안정성)
+        smooth_cols = ['Accelerometer x','Accelerometer y','Accelerometer z',
+                       'Gyroscope x','Gyroscope y','Gyroscope z']
+        for col in smooth_cols:
+            df[col] = df[col].rolling(window=3, center=True, min_periods=1).mean()
+
+        # 2) Norm 재계산
+        df['Acc_Norm'] = np.linalg.norm(df[['Accelerometer x','Accelerometer y','Accelerometer z']].values, axis=1)
+        df['Gyro_Norm'] = np.linalg.norm(df[['Gyroscope x','Gyroscope y','Gyroscope z']].values, axis=1)
+
+        M = len(df)
         windows = []
-        total_len = len(df)
 
-        for start in range(0, total_len - self.window_size + 1, stride):
-            sub_df = df[sensor_cols].iloc[start : start + self.window_size].astype(np.float32)
-            arr = sub_df.values  # shape = (window_size, num_features)
-            scaled = np.zeros_like(arr, dtype=np.float32)
+        for start in range(0, M - self.window_size + 1, stride):
+            # a) 원본 8채널 수집
+            arr = df[['Accelerometer x','Accelerometer y','Accelerometer z',
+                      'Gyroscope x','Gyroscope y','Gyroscope z',
+                      'Acc_Norm','Gyro_Norm']].iloc[start:start+self.window_size].values  # (50,8)
 
-            for idx, col in enumerate(sensor_cols):
-                scaler = self.sensor_scalers.get(col, None)
-                if scaler is not None:
-                    scaled[:, idx] = scaler.transform(arr[:, idx].reshape(-1, 1)).ravel()
-                else:
-                    scaled[:, idx] = arr[:, idx]
+            # b) 6축 통계(평균, 표준편차, 분산, 최대, 최소) 계산 → 30차원
+            stats = []
+            for ax in range(6):
+                x = arr[:, ax]
+                stats.extend([x.mean(), x.std(), x.var(), x.max(), x.min()])
+            stats = np.array(stats, dtype=np.float32)                # (30,)
+            stats_tile = np.tile(stats, (self.window_size, 1))       # (50,30)
 
-            windows.append(scaled)
+            # c) 결합 → (50,38)
+            window = np.concatenate([arr, stats_tile], axis=1)
+
+            # d) 스케일링 적용
+            flat = window.reshape(-1, window.shape[1])               # (50*38, )
+            scaled_flat = np.zeros_like(flat, dtype=np.float32)
+            for idx in range(flat.shape[1]):
+                scaled_flat[:, idx] = self.sensor_scalers[idx].transform(flat[:, idx:idx+1]).ravel()
+            window_scaled = scaled_flat.reshape(self.window_size, -1)  # (50,38)
+
+            windows.append(window_scaled)
 
         return np.array(windows, dtype=np.float32)
 
