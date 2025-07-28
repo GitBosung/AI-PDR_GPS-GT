@@ -10,7 +10,7 @@ from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.layers import BatchNormalization, Dropout
 
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 
@@ -40,17 +40,17 @@ class ModelTrainer:
             raise ValueError("num_features를 지정하거나, train_model()에서 자동 설정하세요.")
 
         self.model = Sequential([
-            LSTM(128, return_sequences=True, input_shape=(self.window_size, n_feat)),
+            LSTM(64, return_sequences=True, input_shape=(self.window_size, n_feat)),
+            BatchNormalization(),
             Dropout(0.2),
-            
-            LSTM(64, return_sequences=True),
+             
+            LSTM(32, return_sequences=False),
+            BatchNormalization(),
             Dropout(0.2),
 
-            LSTM(32, return_sequences=False),
-            
             Dense(2)  # [scaled speed, scaled heading_change]
         ])
-        self.model.compile(optimizer=Adam(1e-3), loss='mse')
+        self.model.compile(optimizer=Adam(1e-4), loss='mse')
         return self.model
 
     def scale_sensor_data(self, X: np.ndarray, fit: bool = True) -> np.ndarray:
@@ -64,7 +64,7 @@ class ModelTrainer:
         for idx in range(f):
             col = flat[:, idx:idx+1]
             if fit:
-                scaler = MinMaxScaler(feature_range=(-1, 1))
+                scaler = RobustScaler()
                 flat_s = scaler.fit_transform(col)
                 self.sensor_scalers[idx] = scaler
             else:
@@ -85,8 +85,8 @@ class ModelTrainer:
         X_te_s = self.scale_sensor_data(X_te, fit=False)
 
         # 3) Y 스케일
-        self.y_speed_scaler = MinMaxScaler(feature_range=(-1,1))
-        self.y_hc_scaler    = MinMaxScaler(feature_range=(-1,1))
+        self.y_speed_scaler = RobustScaler()
+        self.y_hc_scaler    = RobustScaler()
 
         y1 = self.y_speed_scaler.fit_transform(Y_tr[:, :1])
         y2 = self.y_hc_scaler.fit_transform(Y_tr[:, 1:2])
@@ -153,3 +153,4 @@ class ModelTrainer:
         plt.legend()
         plt.grid(True)
         plt.show()
+

@@ -130,7 +130,8 @@ class DataProcessor:
                 idx = min(i*50 + 25, M-1)
                 e.append(df['E'].iloc[idx])
                 n.append(df['N'].iloc[idx])
-            e = np.array(e); n = np.array(n)
+            e = np.array(e); 
+            n = np.array(n)
 
         # ------------------------------------------------------------------
         # 5) 1Hz 궤적 보정: 초기 heading 회전 정렬
@@ -179,16 +180,8 @@ class DataProcessor:
                 df['Gyro_Norm'].values[i:i+50],
             ], axis=1)  # (50,8)
 
-            # 6축 통계 5종 계산 → (30,)
-            stats = []
-            for ax in range(6):
-                x = arr[:, ax]
-                stats += [x.mean(), x.std(), x.var(), x.max(), x.min()]
-            stats = np.array(stats, dtype=np.float32)
-            stats_mat = np.tile(stats, (50,1))  # (50,30)
 
-            window = np.concatenate([arr, stats_mat], axis=1)  # (50,38)
-            sensor_windows.append(window)
+            sensor_windows.append(arr)
 
         # ------------------------------------------------------------------
         # 9–10) X, Y 생성

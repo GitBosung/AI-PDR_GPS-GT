@@ -40,25 +40,16 @@ class TrajectoryPredictor:
             # a) 원본 8채널 수집
             arr = df[['Accelerometer x','Accelerometer y','Accelerometer z',
                       'Gyroscope x','Gyroscope y','Gyroscope z',
-                      'Acc_Norm','Gyro_Norm']].iloc[start:start+self.window_size].values  # (50,8)
+                      'Acc_Norm','Gyro_Norm']].iloc[start:start+self.window_size].values  
 
-            # b) 6축 통계(평균, 표준편차, 분산, 최대, 최소) 계산 → 30차원
-            stats = []
-            for ax in range(6):
-                x = arr[:, ax]
-                stats.extend([x.mean(), x.std(), x.var(), x.max(), x.min()])
-            stats = np.array(stats, dtype=np.float32)                # (30,)
-            stats_tile = np.tile(stats, (self.window_size, 1))       # (50,30)
-
-            # c) 결합 → (50,38)
-            window = np.concatenate([arr, stats_tile], axis=1)
+            window = arr
 
             # d) 스케일링 적용
-            flat = window.reshape(-1, window.shape[1])               # (50*38, )
+            flat = window.reshape(-1, window.shape[1])             
             scaled_flat = np.zeros_like(flat, dtype=np.float32)
             for idx in range(flat.shape[1]):
                 scaled_flat[:, idx] = self.sensor_scalers[idx].transform(flat[:, idx:idx+1]).ravel()
-            window_scaled = scaled_flat.reshape(self.window_size, -1)  # (50,38)
+            window_scaled = scaled_flat.reshape(self.window_size, -1) 
 
             windows.append(window_scaled)
 
@@ -81,7 +72,11 @@ class TrajectoryPredictor:
         #    - 첫 번째 열은 속도, 두 번째 열은 헤딩 변화량
         pred_speed = self.y_speed_scaler.inverse_transform(Y_pred_scaled[:, 0].reshape(-1, 1)).ravel()
         pred_hc    = self.y_hc_scaler.inverse_transform(Y_pred_scaled[:, 1].reshape(-1, 1)).ravel()
-
+        
+        # noise 제거를 위해 10도 이하의 헤딩 변화량을 0으로 보정
+        #pred_hc[np.abs(np.degrees(pred_hc)) < 10] = 0
+        
+    
         # 플래그에 따라 보정 필요시 스케일(0.1) 곱하기
         if not plag_1Hz:
             # 예: 모델이 10배로 학습했다면 0.1 곱
@@ -104,7 +99,7 @@ class TrajectoryPredictor:
         # 헤딩 변화 예측 그래프 (deg 단위)
         # -------------------------------
         plt.figure(figsize=(8, 4))
-        plt.plot(np.degrees(pred_hc*10), '-o', label='Predicted Heading Change (deg)', markersize=4)
+        plt.plot(np.degrees(pred_hc), '-o', label='Predicted Heading Change (deg)', markersize=4)
         plt.title(f'Predicted Heading Change (stride={stride})')
         plt.xlabel('Window Index')
         plt.ylabel('Heading Change (deg)')
@@ -115,15 +110,17 @@ class TrajectoryPredictor:
         # -------------------------------
         # Predicted 궤적 누적 적분
         # -------------------------------
+        arr_heading = [0]
         x = y = heading = 0.0
         traj_x, traj_y = [x], [y]
         for s, dh in zip(pred_speed, pred_hc):
             heading += dh
+            arr_heading.append(heading)
             x += s * np.cos(heading)
             y += s * np.sin(heading)
             traj_x.append(x)
             traj_y.append(y)
-
+            
         # -------------------------------
         # Predicted Movement Trajectory plot
         # -------------------------------
@@ -137,6 +134,19 @@ class TrajectoryPredictor:
         plt.grid(True)
         plt.axis('equal')
         plt.legend()
+        plt.show()
+
+        plt.plot(np.degrees(arr_heading), 'r-', label='Heading (deg)')
+        plt.title('Cumulative Heading Change')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Heading (deg)')
+        plt.legend()
+        plt.grid(True, which='both', axis='y')
+        plt.yticks(np.arange(
+            int(np.floor(np.min(np.degrees(arr_heading)) / 90) * 90),
+            int(np.ceil(np.max(np.degrees(arr_heading)) / 90) * 90) + 1,
+            90
+        ))
         plt.show()
 
         return np.vstack([pred_speed, pred_hc]).T, (traj_x, traj_y)
@@ -180,6 +190,9 @@ class TrajectoryPredictor:
         if not plag_1Hz:
             pred_speed *= 0.1
             pred_hc    *= 0.1
+            
+        # noise 제거를 위해 10도 이하의 헤딩 변화량을 0으로 보정
+        pred_hc[np.abs(np.degrees(pred_hc)) < 10] = 0
 
         # ===== 3) GT를 윈도우 단위로 추출하여 pred와 동일한 길이로 맞춤 =====
         # df['speed_1'], df['heading_1']는 50Hz로 샘플링된 GT값 배열(길이=total_len)
