@@ -50,7 +50,7 @@ class ModelTrainer:
 
             Dense(2)  # [scaled speed, scaled heading_change]
         ])
-        self.model.compile(optimizer=Adam(1e-4), loss='mse')
+        self.model.compile(optimizer=Adam(1e-4), loss='mae')
         return self.model
 
     def scale_sensor_data(self, X: np.ndarray, fit: bool = True) -> np.ndarray:

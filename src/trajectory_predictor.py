@@ -191,8 +191,8 @@ class TrajectoryPredictor:
             pred_speed *= 0.1
             pred_hc    *= 0.1
             
-        # noise 제거를 위해 10도 이하의 헤딩 변화량을 0으로 보정
-        pred_hc[np.abs(np.degrees(pred_hc)) < 10] = 0
+        # # noise 제거를 위해 10도 이하의 헤딩 변화량을 0으로 보정
+        # pred_hc[np.abs(np.degrees(pred_hc)) < 10] = 0
 
         # ===== 3) GT를 윈도우 단위로 추출하여 pred와 동일한 길이로 맞춤 =====
         # df['speed_1'], df['heading_1']는 50Hz로 샘플링된 GT값 배열(길이=total_len)
