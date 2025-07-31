@@ -5,7 +5,7 @@ import joblib
 
 import tensorflow as tf
 from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import LSTM, Dense
+from tensorflow.keras.layers import LSTM, Dense, MultiHeadAttention, LayerNormalization
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.layers import BatchNormalization, Dropout
@@ -33,24 +33,39 @@ class ModelTrainer:
         self.y_hc_scaler    = None
         self.model          = None
 
+
     def build_model(self):
-        # 입력 차원 없으면 이후에 설정
-        n_feat = self.num_features
-        if n_feat is None:
+        if self.num_features is None:
             raise ValueError("num_features를 지정하거나, train_model()에서 자동 설정하세요.")
-
-        self.model = Sequential([
-            LSTM(64, return_sequences=True, input_shape=(self.window_size, n_feat)),
-            BatchNormalization(),
-            Dropout(0.2),
-             
-            LSTM(32, return_sequences=False),
-            BatchNormalization(),
-            Dropout(0.2),
-
-            Dense(2)  # [scaled speed, scaled heading_change]
-        ])
-        self.model.compile(optimizer=Adam(1e-4), loss='mae')
+        
+        inputs = tf.keras.Input(shape=(self.window_size, self.num_features))
+        
+        # 1) 첫 번째 LSTM 블록 (시퀀스 반환)
+        x = LSTM(128, return_sequences=True)(inputs)
+        x = LayerNormalization()(x)
+        x = Dropout(0.2)(x)
+        
+        # 2) Multi-Head Self-Attention
+        #    - num_heads: 4, key_dim: 32 (128/4)
+        attn_output = MultiHeadAttention(
+            num_heads=4,
+            key_dim=32,
+            dropout=0.1
+        )(x, x)
+        # Residual connection
+        x = x + attn_output
+        x = LayerNormalization()(x)
+        
+        # 3) 두 번째 LSTM 블록 (시퀀스 요약)
+        x = LSTM(64, return_sequences=False)(x)
+        x = LayerNormalization()(x)
+        x = Dropout(0.2)(x)
+        
+        # 4) 예측 레이어
+        outputs = Dense(2, name='predictions')(x)  # [scaled speed, scaled heading_change]
+        
+        self.model = tf.keras.Model(inputs=inputs, outputs=outputs, name='LSTM_with_Attention')
+        self.model.compile(optimizer=Adam(1e-4), loss='mse')
         return self.model
 
     def scale_sensor_data(self, X: np.ndarray, fit: bool = True) -> np.ndarray:
@@ -64,7 +79,8 @@ class ModelTrainer:
         for idx in range(f):
             col = flat[:, idx:idx+1]
             if fit:
-                scaler = RobustScaler()
+                scaler = MinMaxScaler(feature_range=(-1, 1))
+                #scaler = RobustScaler()
                 flat_s = scaler.fit_transform(col)
                 self.sensor_scalers[idx] = scaler
             else:
@@ -85,8 +101,13 @@ class ModelTrainer:
         X_te_s = self.scale_sensor_data(X_te, fit=False)
 
         # 3) Y 스케일
-        self.y_speed_scaler = RobustScaler()
-        self.y_hc_scaler    = RobustScaler()
+        self.y_speed_scaler = MinMaxScaler(feature_range=(-1, 1))
+        self.y_hc_scaler    = MinMaxScaler(feature_range=(-1, 1))
+        
+        # self.y_speed_scaler = RobustScaler()
+        # self.y_hc_scaler    = RobustScaler()
+        
+        
 
         y1 = self.y_speed_scaler.fit_transform(Y_tr[:, :1])
         y2 = self.y_hc_scaler.fit_transform(Y_tr[:, 1:2])

@@ -10,7 +10,7 @@ class TrajectoryPredictor:
       DataProcessor로 준비된 df에서 윈도우 생성 → 통계 피처 계산 → 스케일 → 예측 → 복원 → 시각화
     """
 
-    def __init__(self, model, sensor_scalers, y_speed_scaler, y_hc_scaler, window_size=50):
+    def __init__(self, model, sensor_scalers, y_speed_scaler, y_hc_scaler, window_size):
         self.model = model
         self.sensor_scalers = sensor_scalers
         self.y_speed_scaler = y_speed_scaler
@@ -26,13 +26,15 @@ class TrajectoryPredictor:
         # 1) 스무딩 재적용 (안정성)
         smooth_cols = ['Accelerometer x','Accelerometer y','Accelerometer z',
                        'Gyroscope x','Gyroscope y','Gyroscope z']
-        for col in smooth_cols:
-            df[col] = df[col].rolling(window=3, center=True, min_periods=1).mean()
+        # for col in smooth_cols:
+        #     df[col] = df[col].rolling(window=3, center=True, min_periods=1).mean()
 
-        # 2) Norm 재계산
-        df['Acc_Norm'] = np.linalg.norm(df[['Accelerometer x','Accelerometer y','Accelerometer z']].values, axis=1)
-        df['Gyro_Norm'] = np.linalg.norm(df[['Gyroscope x','Gyroscope y','Gyroscope z']].values, axis=1)
+        # # 2) Norm 재계산
+        # df['Acc_Norm'] = np.linalg.norm(df[['Accelerometer x','Accelerometer y','Accelerometer z']].values, axis=1)
+        # df['Gyro_Norm'] = np.linalg.norm(df[['Gyroscope x','Gyroscope y','Gyroscope z']].values, axis=1)
 
+        
+        
         M = len(df)
         windows = []
 
@@ -40,7 +42,7 @@ class TrajectoryPredictor:
             # a) 원본 8채널 수집
             arr = df[['Accelerometer x','Accelerometer y','Accelerometer z',
                       'Gyroscope x','Gyroscope y','Gyroscope z',
-                      'Acc_Norm','Gyro_Norm']].iloc[start:start+self.window_size].values  
+                      'Acc_Norm','Gyro_Norm']].iloc[start:start+self.window_size].values
 
             window = arr
 
@@ -62,7 +64,9 @@ class TrajectoryPredictor:
         2) 예측된 속도·헤딩을 plot
         3) 예측 궤적(accumulate) plot
         """
-        stride = 50 if plag_1Hz else 5
+        
+        stride = self.window_size if plag_1Hz else self.window_size // 10
+        
         X = self._prepare_windows(df, stride=stride)  # shape = (num_windows, window_size, num_features)
 
         # 1) 모델 예측 (스케일된 Y_pred_scaled)
@@ -77,11 +81,9 @@ class TrajectoryPredictor:
         #pred_hc[np.abs(np.degrees(pred_hc)) < 10] = 0
         
     
-        # 플래그에 따라 보정 필요시 스케일(0.1) 곱하기
         if not plag_1Hz:
-            # 예: 모델이 10배로 학습했다면 0.1 곱
-            pred_speed *= 0.1
-            pred_hc    *= 0.1
+            pred_speed = pred_speed * 0.1
+            pred_hc    = pred_hc * 0.1
 
         # -------------------------------
         # 속도 예측 그래프
@@ -165,7 +167,7 @@ class TrajectoryPredictor:
         """
 
         # ===== 1) stride 결정 및 윈도우 시작 인덱스 목록 생성 =====
-        stride = 50 if plag_1Hz else 5
+        stride = self.window_size if plag_1Hz else self.window_size // 10
         window_size = self.window_size
 
         # 원본 df 길이
@@ -188,8 +190,8 @@ class TrajectoryPredictor:
         ).ravel()
 
         if not plag_1Hz:
-            pred_speed *= 0.1
-            pred_hc    *= 0.1
+            pred_speed = pred_speed * 0.1
+            pred_hc    = pred_hc * 0.1
             
         # # noise 제거를 위해 10도 이하의 헤딩 변화량을 0으로 보정
         # pred_hc[np.abs(np.degrees(pred_hc)) < 10] = 0
@@ -198,6 +200,30 @@ class TrajectoryPredictor:
         # df['speed_1'], df['heading_1']는 50Hz로 샘플링된 GT값 배열(길이=total_len)
         # start_indices 길이 == pred_speed 길이 이므로, 각 윈도우 시작 인덱스에 대응하는 GT를 뽑음
         # (필요하다면 윈도우 끝 지점 또는 중앙 지점을 기준으로 해도 무방. 여기서는 편의상 윈도우 시작 지점을 사용)
+        
+        window = 50
+        
+        # 컬럼 초기화
+        df['speed_1']   = np.nan
+        df['heading_1'] = np.nan
+
+        # e_aug, n_aug 칼럼이 있다고 가정
+        e = df['e_aug'].values
+        n = df['n_aug'].values
+
+        for i in range(len(df) - window):
+            # (1) 1초 동안 이동 거리 → 속도 레이블
+            de = e[i + window] - e[i]
+            dn = n[i + window] - n[i]
+            df.at[i, 'speed_1'] = np.hypot(de, dn)
+            
+            # (2) 1초 동안 헤딩 변화량 → heading 레이블
+            hd = np.arctan2(
+                np.diff(n[i : i + window]), 
+                np.diff(e[i : i + window])
+            )
+            hd = np.unwrap(hd)
+            df.at[i, 'heading_1'] = hd[-1] - hd[0]
 
         # === 수정된 부분 ===
         # start_indices가 [0, 5, 10, 15, ...] 형태이므로, 해당 인덱스만큼 GT 값을 뽑아 길이를 맞춘다.

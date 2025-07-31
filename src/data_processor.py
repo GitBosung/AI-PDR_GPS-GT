@@ -35,20 +35,17 @@ class DataProcessor:
         pass
 
     @staticmethod
-    def load_and_preprocess_csv(path, skiprows=300, flag=False, zone=52):
-        # ------------------------------------------------------------------
-        # 1) CSV 파일 읽기 및 열 이름 지정
-        # ------------------------------------------------------------------
+    def load_and_preprocess_csv(file_path, skiprows=500, flag=False, zone=52):
         if flag:
             df = pd.read_csv(
-                path, skiprows=skiprows, skipfooter=500,
+                file_path, skiprows=skiprows, skipfooter=100,
                 na_values=['', 'nan', 'NaN'], engine='python'
             ).fillna(0)
         else:
             df = pd.read_csv(
-                path, skiprows=skiprows, skipfooter=500, engine='python'
+            file_path, skiprows=skiprows, skipfooter=100, engine='python'
             )
-
+            
         df.columns = [
             'Time',
             'Accelerometer x', 'Accelerometer y', 'Accelerometer z',
@@ -57,41 +54,20 @@ class DataProcessor:
             'Orientation x', 'Orientation y', 'Orientation z',
             'Pressure', 'Latitude', 'Longitude', 'Altitude', 'Speed_GPS'
         ]
+        
+        df['Acc_Norm'] = np.sqrt(df['Accelerometer x']**2 +
+                                 df['Accelerometer y']**2 +
+                                 df['Accelerometer z']**2)
+        
+        df['Gyro_Norm'] = np.sqrt(df['Gyroscope x']**2 +
+                                  df['Gyroscope y']**2 +
+                                  df['Gyroscope z']**2)
+        
 
-        # ------------------------------------------------------------------
-        # 2) Time → datetime 변환 및 경과 시간(초) 계산
-        # ------------------------------------------------------------------
         df['Time'] = pd.to_datetime(df['Time'], format='%Y-%m-%d %H:%M:%S.%f')
         start_dt = df['Time'].iloc[0]
         df['Elapsed Time'] = (df['Time'] - start_dt).dt.total_seconds()
-
-        # ------------------------------------------------------------------
-        # 3) 스무딩: 3-포인트 이동평균 적용 (center=True)
-        #    - 노이즈 억제 후 Norm 계산
-        # ------------------------------------------------------------------
-        smooth_cols = [
-            'Accelerometer x', 'Accelerometer y', 'Accelerometer z',
-            'Gyroscope x', 'Gyroscope y', 'Gyroscope z'
-        ]
-        for c in smooth_cols:
-            df[c] = df[c].rolling(window=3, center=True, min_periods=1).mean()
-
-        df['Acc_Norm'] = np.sqrt(
-            df['Accelerometer x']**2 +
-            df['Accelerometer y']**2 +
-            df['Accelerometer z']**2
-        )
-        df['Gyro_Norm'] = np.sqrt(
-            df['Gyroscope x']**2 +
-            df['Gyroscope y']**2 +
-            df['Gyroscope z']**2
-        )
-
-        # ------------------------------------------------------------------
-        # 4) 위경도 → UTM ENU 좌표(E, N) 변환
-        #    - flag=True: 유효한 GPS만 필터링
-        #    - flag=False: 전체 샘플 UTM 변환
-        # ------------------------------------------------------------------
+        
         if flag:
             # (기존 원본 로직 그대로 유지)
             valid_gps_mask = (
@@ -130,85 +106,152 @@ class DataProcessor:
                 idx = min(i*50 + 25, M-1)
                 e.append(df['E'].iloc[idx])
                 n.append(df['N'].iloc[idx])
-            e = np.array(e); 
+            e = np.array(e)
             n = np.array(n)
-
+                
         # ------------------------------------------------------------------
         # 5) 1Hz 궤적 보정: 초기 heading 회전 정렬
         # ------------------------------------------------------------------
         dx0, dy0 = e[1]-e[0], n[1]-n[0]
         theta0 = math.atan2(dy0, dx0)
         R0 = np.array([[math.cos(-theta0), -math.sin(-theta0)],
-                       [math.sin(-theta0),  math.cos(-theta0)]])
+                    [math.sin(-theta0),  math.cos(-theta0)]])
         coords = np.vstack([e-e[0], n-n[0]])
         rotated = R0 @ coords
         e_corr, n_corr = rotated[0], rotated[1]
+        
+        # 1) 보간용 원본 인덱스와 타겟 인덱스 생성
+        M = len(e_corr)
+        t_old = np.arange(M)                          
+        t_new = np.linspace(0, M - 1, (M-1)*50 + 1)          
 
-        # ------------------------------------------------------------------
-        # 6) 거리 변화량·헤딩 변화량 계산 후 차분
-        # ------------------------------------------------------------------
-        dxe = np.diff(e_corr); dye = np.diff(n_corr)
-        v1hz = np.sqrt(dxe**2 + dye**2)
-        hd_cum = np.unwrap(np.arctan2(dye, dxe))
-        dh1hz = np.diff(hd_cum)
+        # 2) 선형 보간 함수 생성
+        f_e = interp1d(t_old, e_corr, kind='cubic')
+        f_n = interp1d(t_old, n_corr, kind='cubic')
 
-        # ------------------------------------------------------------------
-        # 7) 1Hz → 50Hz 보간 (cubic)
-        # ------------------------------------------------------------------
-        t_v_old = np.arange(len(v1hz))
-        t_v_new = np.linspace(0, len(v1hz)-1, (len(v1hz)-1)*50+1)
-        t_h_old = np.arange(len(dh1hz))
-        t_h_new = np.linspace(0, len(dh1hz)-1, (len(dh1hz)-1)*50+1)
-        speed_1   = interp1d(t_v_old, v1hz,   kind='cubic')(t_v_new)
-        heading_1 = interp1d(t_h_old, dh1hz, kind='cubic')(t_h_new)
+        # 3) 50개 포인트로 보간
+        e_aug = f_e(t_new)   # shape = (50,)
+        n_aug = f_n(t_new)   # shape = (50,)
+        
+        # df['e_aug'] = e_aug
+        # df['n_aug'] = n_aug
+        
+        df2 = df.iloc[:len(e_aug)].copy()
 
-        # ------------------------------------------------------------------
-        # 8) 50Hz 윈도우별 시계열 + 통계 피처 생성
-        #    - 원본 8채널 + 6축 통계(5종) = 38차원
-        # ------------------------------------------------------------------
-        M = len(df)
-        sensor_windows = []
-        for i in range(0, M-50+1):
-            arr = np.stack([
-                df['Accelerometer x'].values[i:i+50],
-                df['Accelerometer y'].values[i:i+50],
-                df['Accelerometer z'].values[i:i+50],
-                df['Gyroscope x'].values[i:i+50],
-                df['Gyroscope y'].values[i:i+50],
-                df['Gyroscope z'].values[i:i+50],
-                df['Acc_Norm'].values[i:i+50],
-                df['Gyro_Norm'].values[i:i+50],
-            ], axis=1)  # (50,8)
+        # 2) 그 위에 보간 결과를 할당
+        df2['e_aug'] = e_aug
+        df2['n_aug'] = n_aug
+        
+        e = df2['e_aug'].values  # shape = (T,)
+        n = df2['n_aug'].values  # shape = (T,)
+
+        window_size = 200  # 1초 = 50샘플
+        num_wins = len(e) - window_size + 1
+
+        # 결과 저장용
+        y_speed = np.zeros(num_wins)
+        y_dh    = np.zeros(num_wins)
+        
+        # 5) Norm 채널 추가
+        df2['Acc_Norm']  = np.linalg.norm(
+            df2[['Accelerometer x','Accelerometer y','Accelerometer z']].values,
+            axis=1
+        )
+        df2['Gyro_Norm'] = np.linalg.norm(
+            df2[['Gyroscope x','Gyroscope y','Gyroscope z']].values,
+            axis=1
+        )
+        
+        threshold = np.deg2rad(10)
+
+        for i in range(num_wins):
+            we = e[i : i+window_size]   # window of Eastings
+            wn = n[i : i+window_size]   # window of Northings
+
+            # 1) 속도: 시작점→종료점 직선 이동 거리 (m/s)
+            dx = we[-1] - we[0]
+            dy = wn[-1] - wn[0]
+            dist = np.hypot(dx, dy)    # sqrt(dx^2 + dy^2)
+            y_speed[i] = dist          # 1초 동안 이동거리 = 속도(m/s)
+
+            # 2) 방향변화량: 각 샘플 간 heading 변화를 누적
+            
+            headings = np.arctan2(np.diff(wn), np.diff(we))
+            headings = np.unwrap(headings)
+
+            # Δheading 원본
+            raw_delta = headings[-1] - headings[0]
+            
+            dh = np.diff(headings)
+            total_delta = np.sum(dh)
+
+            # # 소프트 데드존 적용
+            # if abs(raw_delta) < threshold:
+            #     delta = 0
+            # else:
+            #     delta = np.sign(raw_delta) * (abs(raw_delta) - threshold)
+
+            y_dh[i] = total_delta
+            
+        sensor_cols = ['Accelerometer x','Accelerometer y','Accelerometer z',
+                        'Gyroscope x','Gyroscope y','Gyroscope z',
+                        'Acc_Norm',
+                        'Gyro_Norm']
+        
+        sensor = df2[sensor_cols].values  # shape = (T,6)
+
+        X = np.zeros((num_wins, window_size, len(sensor_cols)), dtype=np.float32)
+        for i in range(num_wins):
+            X[i] = sensor[i : i+window_size]
+
+        # (2) Y 결합
+        Y = np.vstack([y_speed, y_dh]).T   # shape = (num_wins, 2)
+                
+        return df2, X, Y
+    
+    
+        # M = len(df)
+        # sensor_windows = []
+        # for i in range(0, M-50+1):
+        #     arr = np.stack([
+        #         df['Accelerometer x'].values[i:i+50],
+        #         df['Accelerometer y'].values[i:i+50],
+        #         df['Accelerometer z'].values[i:i+50],
+        #         df['Gyroscope x'].values[i:i+50],
+        #         df['Gyroscope y'].values[i:i+50],
+        #         df['Gyroscope z'].values[i:i+50],
+        #         df['Acc_Norm'].values[i:i+50],
+        #         df['Gyro_Norm'].values[i:i+50],
+        #     ], axis=1)  # (50,8)
 
 
-            sensor_windows.append(arr)
+        #     sensor_windows.append(arr)
 
-        # ------------------------------------------------------------------
-        # 9–10) X, Y 생성
-        # ------------------------------------------------------------------
-        usable = min(len(sensor_windows), len(speed_1), len(heading_1))
-        X = np.stack(sensor_windows[:usable], axis=0)  # (usable,50,38)
-        Y = np.stack([speed_1[:usable], heading_1[:usable]], axis=1)
+        # # ------------------------------------------------------------------
+        # # 9–10) X, Y 생성
+        # # ------------------------------------------------------------------
+        # usable = min(len(sensor_windows), len(speed_1), len(heading_1))
+        # X = np.stack(sensor_windows[:usable], axis=0)  # (usable,50,38)
+        # Y = np.stack([speed_1[:usable], heading_1[:usable]], axis=1)
 
-        # ------------------------------------------------------------------
-        # 11) 원본 df에 speed_1, heading_1 컬럼 추가
-        # ------------------------------------------------------------------
-        df['speed_1']   = np.nan
-        df['heading_1'] = np.nan
-        for j in range(usable):
-            df.at[j, 'speed_1']   = speed_1[j]
-            df.at[j, 'heading_1'] = heading_1[j]
+        # # ------------------------------------------------------------------
+        # # 11) 원본 df에 speed_1, heading_1 컬럼 추가
+        # # ------------------------------------------------------------------
+        # df['speed_1']   = np.nan
+        # df['heading_1'] = np.nan
+        # for j in range(usable):
+        #     df.at[j, 'speed_1']   = speed_1[j]
+        #     df.at[j, 'heading_1'] = heading_1[j]
 
-        return df, X, Y
+        # return df, X, Y
 
-
+    #delimiter=',', header=0, 
     @staticmethod
-    def load_and_preprocess_csv_test(file_path, delimiter=',', header=0, skiprows=100):
+    def load_and_preprocess_csv_test(file_path, skiprows=100):
         # ... 기존 테스트용 전처리 로직 그대로 유지 ...
-        df = pd.read_csv(file_path, delimiter=delimiter, header=header,
-                         skiprows=skiprows, skipfooter=100)
-        if len(df) > 100:
-            df = df.iloc[:-100].reset_index(drop=True)
+        df = pd.read_csv(
+        file_path, skiprows=skiprows, engine='python'
+        )
 
         df.columns = [
             'Time',
