@@ -162,34 +162,69 @@ class DataProcessor:
             axis=1
         )
         
-        threshold = np.deg2rad(10)
 
+        # for i in range(num_wins):
+        #     we = e[i : i+window_size]   # window of Eastings
+        #     wn = n[i : i+window_size]   # window of Northings
+
+        #     # 1) 속도: 시작점→종료점 직선 이동 거리 (m/s)
+        #     dx = we[-1] - we[0]
+        #     dy = wn[-1] - wn[0]
+        #     dist = np.hypot(dx, dy)    # sqrt(dx^2 + dy^2)
+        #     y_speed[i] = dist          # 1초 동안 이동거리 = 속도(m/s)
+
+        #     # 2) 방향변화량: 각 샘플 간 heading 변화를 누적
+            
+        #     headings = np.arctan2(np.diff(wn), np.diff(we))
+        #     headings = np.unwrap(headings)
+
+        #     # Δheading 원본
+        #     raw_delta = headings[-1] - headings[0]
+            
+        #     dh = np.diff(headings)
+        #     total_delta = np.sum(dh)
+
+        #     # # 소프트 데드존 적용
+        #     # if abs(raw_delta) < threshold:
+        #     #     delta = 0
+        #     # else:
+        #     #     delta = np.sign(raw_delta) * (abs(raw_delta) - threshold)
+
+        #     y_dh[i] = total_delta
+            
         for i in range(num_wins):
             we = e[i : i+window_size]   # window of Eastings
             wn = n[i : i+window_size]   # window of Northings
 
-            # 1) 속도: 시작점→종료점 직선 이동 거리 (m/s)
+            # 1) 속도: 시작점→종료점 직선 이동 거리 (m)
             dx = we[-1] - we[0]
             dy = wn[-1] - wn[0]
-            dist = np.hypot(dx, dy)    # sqrt(dx^2 + dy^2)
-            y_speed[i] = dist          # 1초 동안 이동거리 = 속도(m/s)
+            dist = np.hypot(dx, dy)
+            y_speed[i] = dist
 
-            # 2) 방향변화량: 각 샘플 간 heading 변화를 누적
-            
-            headings = np.arctan2(np.diff(wn), np.diff(we))
-            headings = np.unwrap(headings)
+            # 2) 방향변화량: 벡터 간 회전각 누적 (언랩 불필요)
+            vel_x = np.diff(we)   # ΔE
+            vel_y = np.diff(wn)   # ΔN
+            spd   = np.hypot(vel_x, vel_y)
 
-            # Δheading 원본
-            raw_delta = headings[-1] - headings[0]
-            
-            dh = np.diff(headings)
-            total_delta = np.sum(dh)
+            EPS = 0.02  # 데이터 스케일에 맞게 조정(예: 1~5cm 이동 임계)
+            valid = spd > EPS
 
-            # # 소프트 데드존 적용
-            # if abs(raw_delta) < threshold:
-            #     delta = 0
-            # else:
-            #     delta = np.sign(raw_delta) * (abs(raw_delta) - threshold)
+            if np.count_nonzero(valid) >= 3:
+                vx = vel_x[valid]
+                vy = vel_y[valid]
+
+                # (k -> k+1) 회전각: atan2(cross, dot) ∈ (-π, π)
+                cross = vx[:-1]*vy[1:] - vy[:-1]*vx[1:]
+                dot   = vx[:-1]*vx[1:] + vy[:-1]*vy[1:]
+                delta_angles = np.arctan2(cross, dot)
+
+                total_delta = np.sum(delta_angles)
+
+                # 최종 정규화 선택 (원하면 사용)
+                total_delta = (total_delta + np.pi) % (2*np.pi) - np.pi
+            else:
+                total_delta = 0.0
 
             y_dh[i] = total_delta
             

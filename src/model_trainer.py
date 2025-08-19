@@ -67,6 +67,30 @@ class ModelTrainer:
         self.model = tf.keras.Model(inputs=inputs, outputs=outputs, name='LSTM_with_Attention')
         self.model.compile(optimizer=Adam(1e-4), loss='mse')
         return self.model
+    
+    # def build_model(self):
+    #     if self.num_features is None:
+    #         raise ValueError("num_features를 지정하거나, train_model()에서 자동 설정하세요.")
+        
+    #     inputs = tf.keras.Input(shape=(self.window_size, self.num_features))
+        
+    #     # 1) 첫 번째 LSTM 블록 (시퀀스 반환)
+    #     x = LSTM(128, return_sequences=True)(inputs)
+    #     x = LayerNormalization()(x)
+    #     x = Dropout(0.2)(x)
+        
+    #     # 2) 두 번째 LSTM 블록 (시퀀스 요약)
+    #     x = LSTM(64, return_sequences=False)(x)
+    #     x = LayerNormalization()(x)
+    #     x = Dropout(0.2)(x)
+        
+    #     # 3) 예측 레이어
+    #     outputs = Dense(2, name='predictions')(x)  # [scaled speed, scaled heading_change]
+        
+    #     self.model = tf.keras.Model(inputs=inputs, outputs=outputs, name='LSTM_Model')
+    #     self.model.compile(optimizer=Adam(1e-4), loss='mse')
+    #     return self.model
+
 
     def scale_sensor_data(self, X: np.ndarray, fit: bool = True) -> np.ndarray:
         n_s, w, f = X.shape
