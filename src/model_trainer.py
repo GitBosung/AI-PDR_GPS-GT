@@ -42,7 +42,7 @@ class ModelTrainer:
         
         # 1) 첫 번째 LSTM 블록 (시퀀스 반환)
         x = LSTM(128, return_sequences=True)(inputs)
-        x = LayerNormalization()(x)
+        # x = LayerNormalization()(x)
         x = Dropout(0.2)(x)
         
         # 2) Multi-Head Self-Attention
@@ -50,16 +50,16 @@ class ModelTrainer:
         attn_output = MultiHeadAttention(
             num_heads=4,
             key_dim=32,
-            dropout=0.1
+            dropout=0.05
         )(x, x)
         # Residual connection
         x = x + attn_output
-        x = LayerNormalization()(x)
+        # x = LayerNormalization()(x)
         
         # 3) 두 번째 LSTM 블록 (시퀀스 요약)
         x = LSTM(64, return_sequences=False)(x)
-        x = LayerNormalization()(x)
-        x = Dropout(0.2)(x)
+        # x = LayerNormalization()(x)
+        # x = Dropout(0.2)(x)
         
         # 4) 예측 레이어
         outputs = Dense(2, name='predictions')(x)  # [scaled speed, scaled heading_change]

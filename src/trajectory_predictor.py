@@ -85,29 +85,29 @@ class TrajectoryPredictor:
             pred_speed = pred_speed * 0.1
             pred_hc    = pred_hc * 0.1
 
-        # -------------------------------
-        # 속도 예측 그래프
-        # -------------------------------
-        plt.figure(figsize=(8, 4))
-        plt.plot(pred_speed, '-o', label='Predicted Speed (m/s)', markersize=4)
-        plt.title(f'Predicted Speed (stride={stride})')
-        plt.xlabel('Window Index')
-        plt.ylabel('Speed (m/s)')
-        plt.grid(True)
-        plt.legend()
-        plt.show()
+        # # -------------------------------
+        # # 속도 예측 그래프
+        # # -------------------------------
+        # plt.figure(figsize=(8, 4))
+        # plt.plot(pred_speed, '-o', label='Predicted Speed (m/s)', markersize=4)
+        # plt.title(f'Predicted Speed (stride={stride})')
+        # plt.xlabel('Window Index')
+        # plt.ylabel('Speed (m/s)')
+        # plt.grid(True)
+        # plt.legend()
+        # plt.show()
 
-        # -------------------------------
-        # 헤딩 변화 예측 그래프 (deg 단위)
-        # -------------------------------
-        plt.figure(figsize=(8, 4))
-        plt.plot(np.degrees(pred_hc), '-o', label='Predicted Heading Change (deg)', markersize=4)
-        plt.title(f'Predicted Heading Change (stride={stride})')
-        plt.xlabel('Window Index')
-        plt.ylabel('Heading Change (deg)')
-        plt.grid(True)
-        plt.legend()
-        plt.show()
+        # # -------------------------------
+        # # 헤딩 변화 예측 그래프 (deg 단위)
+        # # -------------------------------
+        # plt.figure(figsize=(8, 4))
+        # plt.plot(np.degrees(pred_hc), '-o', label='Predicted Heading Change (deg)', markersize=4)
+        # plt.title(f'Predicted Heading Change (stride={stride})')
+        # plt.xlabel('Window Index')
+        # plt.ylabel('Heading Change (deg)')
+        # plt.grid(True)
+        # plt.legend()
+        # plt.show()
 
         # -------------------------------
         # Predicted 궤적 누적 적분
@@ -138,18 +138,18 @@ class TrajectoryPredictor:
         plt.legend()
         plt.show()
 
-        plt.plot(np.degrees(arr_heading), 'r-', label='Heading (deg)')
-        plt.title('Cumulative Heading Change')
-        plt.xlabel('Time (s)')
-        plt.ylabel('Heading (deg)')
-        plt.legend()
-        plt.grid(True, which='both', axis='y')
-        plt.yticks(np.arange(
-            int(np.floor(np.min(np.degrees(arr_heading)) / 90) * 90),
-            int(np.ceil(np.max(np.degrees(arr_heading)) / 90) * 90) + 1,
-            90
-        ))
-        plt.show()
+        # plt.plot(np.degrees(arr_heading), 'r-', label='Heading (deg)')
+        # plt.title('Cumulative Heading Change')
+        # plt.xlabel('Time (s)')
+        # plt.ylabel('Heading (deg)')
+        # plt.legend()
+        # plt.grid(True, which='both', axis='y')
+        # plt.yticks(np.arange(
+        #     int(np.floor(np.min(np.degrees(arr_heading)) / 90) * 90),
+        #     int(np.ceil(np.max(np.degrees(arr_heading)) / 90) * 90) + 1,
+        #     90
+        # ))
+        # plt.show()
 
         return np.vstack([pred_speed, pred_hc]).T, (traj_x, traj_y)
 
