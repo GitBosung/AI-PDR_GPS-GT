@@ -6,9 +6,9 @@ import joblib
 import tensorflow as tf
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import LSTM, Dense, MultiHeadAttention, LayerNormalization
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.layers import BatchNormalization, Dropout
+from tensorflow.keras.layers import BatchNormalization, Dropout, Add, Input, GlobalAveragePooling1D, SpatialDropout1D
 
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 from sklearn.model_selection import train_test_split
@@ -33,65 +33,40 @@ class ModelTrainer:
         self.y_hc_scaler    = None
         self.model          = None
 
+    # 그나마 좀 되는 코드 
+    def build_model(self): 
+        if self.num_features is None: 
+            raise ValueError("num_features를 지정하거나, train_model()에서 자동 설정하세요.") 
+        
+        inputs = tf.keras.Input(shape=(self.window_size, self.num_features)) # 1) 첫 LSTM: 시퀀스 출력 
+        x = LSTM(128, return_sequences=True)(inputs) 
+        x = Dropout(0.2)(x) # 2) (중간) Self-Attention 블록 + Residual 연결 
 
-    def build_model(self):
-        if self.num_features is None:
-            raise ValueError("num_features를 지정하거나, train_model()에서 자동 설정하세요.")
-        
-        inputs = tf.keras.Input(shape=(self.window_size, self.num_features))
-        
-        # 1) 첫 번째 LSTM 블록 (시퀀스 반환)
-        x = LSTM(128, return_sequences=True)(inputs)
-        # x = LayerNormalization()(x)
+        x = LayerNormalization()(x)
+        attn = MultiHeadAttention(num_heads=2, key_dim=32)(x, x) 
+        x = Add()([x, attn]) 
         x = Dropout(0.2)(x)
+
+        x = LSTM(128, return_sequences=True)(x) 
+        x = Dropout(0.2)(x) 
         
-        # 2) Multi-Head Self-Attention
-        #    - num_heads: 4, key_dim: 32 (128/4)
-        attn_output = MultiHeadAttention(
-            num_heads=4,
-            key_dim=32,
-            dropout=0.05
-        )(x, x)
-        # Residual connection
-        x = x + attn_output
-        # x = LayerNormalization()(x)
+        x = LSTM(64, return_sequences=False)(x) 
+        x = Dropout(0.2)(x) # 4) 출력 
         
-        # 3) 두 번째 LSTM 블록 (시퀀스 요약)
-        x = LSTM(64, return_sequences=False)(x)
-        # x = LayerNormalization()(x)
-        # x = Dropout(0.2)(x)
+        outputs = Dense(2, name='predictions')(x) 
         
-        # 4) 예측 레이어
-        outputs = Dense(2, name='predictions')(x)  # [scaled speed, scaled heading_change]
+        self.model = tf.keras.Model(
+            inputs=inputs, 
+            outputs=outputs, 
+            name='lstm_attn_lstm') 
         
-        self.model = tf.keras.Model(inputs=inputs, outputs=outputs, name='LSTM_with_Attention')
-        self.model.compile(optimizer=Adam(1e-4), loss='mse')
+        self.model.compile( 
+            optimizer=tf.keras.optimizers.Adam(learning_rate=3e-4), 
+            loss=tf.keras.losses.Huber(delta=1.0),
+            metrics=['mse'] ) 
+        
         return self.model
     
-    # def build_model(self):
-    #     if self.num_features is None:
-    #         raise ValueError("num_features를 지정하거나, train_model()에서 자동 설정하세요.")
-        
-    #     inputs = tf.keras.Input(shape=(self.window_size, self.num_features))
-        
-    #     # 1) 첫 번째 LSTM 블록 (시퀀스 반환)
-    #     x = LSTM(128, return_sequences=True)(inputs)
-    #     x = LayerNormalization()(x)
-    #     x = Dropout(0.2)(x)
-        
-    #     # 2) 두 번째 LSTM 블록 (시퀀스 요약)
-    #     x = LSTM(64, return_sequences=False)(x)
-    #     x = LayerNormalization()(x)
-    #     x = Dropout(0.2)(x)
-        
-    #     # 3) 예측 레이어
-    #     outputs = Dense(2, name='predictions')(x)  # [scaled speed, scaled heading_change]
-        
-    #     self.model = tf.keras.Model(inputs=inputs, outputs=outputs, name='LSTM_Model')
-    #     self.model.compile(optimizer=Adam(1e-4), loss='mse')
-    #     return self.model
-
-
     def scale_sensor_data(self, X: np.ndarray, fit: bool = True) -> np.ndarray:
         n_s, w, f = X.shape
         flat = X.reshape(-1, f)
@@ -113,25 +88,34 @@ class ModelTrainer:
 
         return scaled.reshape(n_s, w, f)
 
-    def train_model(self, X: np.ndarray, Y: np.ndarray):
-        # 1) split
-        X_tr, X_te, Y_tr, Y_te = train_test_split(X, Y, test_size=0.2, random_state=1217)
+    def train_model_grouped(self, X: np.ndarray, Y: np.ndarray, groups: np.ndarray, val_ratio: float = 0.2):
+        """
+        groups: 각 샘플이 어느 '파일'에서 왔는지 나타내는 동일 길이의 벡터 (예: 파일 인덱스)
+                같은 그룹의 샘플은 학습/검증에 동시에 등장하지 않도록 분리.
+        """
+        # 1) 그룹 단위 분할
+        uniq = np.unique(groups)
+        n_val = max(1, int(len(uniq) * val_ratio))
+        rng = np.random.RandomState(1217)
+        rng.shuffle(uniq)
+
+        val_groups = set(uniq[:n_val])
+        train_mask = ~np.isin(groups, list(val_groups))
+        val_mask   =  np.isin(groups, list(val_groups))
+
+        X_tr, X_te = X[train_mask], X[val_mask]
+        Y_tr, Y_te = Y[train_mask], Y[val_mask]
 
         # 자동 num_features 설정
         self.num_features = X_tr.shape[2]
 
-        # 2) X 스케일
+        # 2) 입력 스케일링
         X_tr_s = self.scale_sensor_data(X_tr, fit=True)
         X_te_s = self.scale_sensor_data(X_te, fit=False)
 
-        # 3) Y 스케일
-        self.y_speed_scaler = MinMaxScaler(feature_range=(-1, 1))
-        self.y_hc_scaler    = MinMaxScaler(feature_range=(-1, 1))
-        
-        # self.y_speed_scaler = RobustScaler()
-        # self.y_hc_scaler    = RobustScaler()
-        
-        
+        # 3) Y 스케일링 (속도, heading-change 따로)
+        self.y_speed_scaler = StandardScaler()
+        self.y_hc_scaler    = StandardScaler()
 
         y1 = self.y_speed_scaler.fit_transform(Y_tr[:, :1])
         y2 = self.y_hc_scaler.fit_transform(Y_tr[:, 1:2])
@@ -141,12 +125,15 @@ class ModelTrainer:
         y2_te = self.y_hc_scaler.transform(Y_te[:, 1:2])
         Y_te_s = np.hstack([y1_te, y2_te]).astype(np.float32)
 
-        # 4) 모델 구성 & 학습
+        # 4) 모델 생성
         self.build_model()
+
         callbacks = [
-            EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True),
-            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=10)
+            EarlyStopping(monitor='val_loss', patience=12, restore_best_weights=True, min_delta=1e-4),
+            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=6, min_lr=1e-5),
+            ModelCheckpoint("best_grouped_model.h5", monitor="val_loss", save_best_only=True, verbose=0),
         ]
+
         history = self.model.fit(
             X_tr_s, Y_tr_s,
             validation_data=(X_te_s, Y_te_s),
@@ -156,6 +143,53 @@ class ModelTrainer:
             verbose=1
         )
         return history
+
+
+
+
+    # def train_model(self, X: np.ndarray, Y: np.ndarray):
+    #     # 1) split
+    #     X_tr, X_te, Y_tr, Y_te = train_test_split(X, Y, test_size=0.2, random_state=1217)
+
+    #     # 자동 num_features 설정
+    #     self.num_features = X_tr.shape[2]
+
+    #     # 2) X 스케일
+    #     X_tr_s = self.scale_sensor_data(X_tr, fit=True)
+    #     X_te_s = self.scale_sensor_data(X_te, fit=False)
+
+    #     # 3) Y 스케일
+    #     self.y_speed_scaler = MinMaxScaler(feature_range=(-1, 1))
+    #     self.y_hc_scaler    = MinMaxScaler(feature_range=(-1, 1))
+        
+    #     # self.y_speed_scaler = RobustScaler()
+    #     # self.y_hc_scaler    = RobustScaler()
+        
+        
+
+    #     y1 = self.y_speed_scaler.fit_transform(Y_tr[:, :1])
+    #     y2 = self.y_hc_scaler.fit_transform(Y_tr[:, 1:2])
+    #     Y_tr_s = np.hstack([y1, y2]).astype(np.float32)
+
+    #     y1_te = self.y_speed_scaler.transform(Y_te[:, :1])
+    #     y2_te = self.y_hc_scaler.transform(Y_te[:, 1:2])
+    #     Y_te_s = np.hstack([y1_te, y2_te]).astype(np.float32)
+
+    #     # 4) 모델 구성 & 학습
+    #     self.build_model()
+    #     callbacks = [
+    #         EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True),
+    #         ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=10)
+    #     ]
+    #     history = self.model.fit(
+    #         X_tr_s, Y_tr_s,
+    #         validation_data=(X_te_s, Y_te_s),
+    #         batch_size=self.batch_size,
+    #         epochs=self.epochs,
+    #         callbacks=callbacks,
+    #         verbose=1
+    #     )
+    #     return history
 
     def save_model(self, model_dir='saved_models'):
         os.makedirs(model_dir, exist_ok=True)

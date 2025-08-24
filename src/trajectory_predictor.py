@@ -33,8 +33,6 @@ class TrajectoryPredictor:
         # df['Acc_Norm'] = np.linalg.norm(df[['Accelerometer x','Accelerometer y','Accelerometer z']].values, axis=1)
         # df['Gyro_Norm'] = np.linalg.norm(df[['Gyroscope x','Gyroscope y','Gyroscope z']].values, axis=1)
 
-        
-        
         M = len(df)
         windows = []
 
@@ -138,18 +136,18 @@ class TrajectoryPredictor:
         plt.legend()
         plt.show()
 
-        # plt.plot(np.degrees(arr_heading), 'r-', label='Heading (deg)')
-        # plt.title('Cumulative Heading Change')
-        # plt.xlabel('Time (s)')
-        # plt.ylabel('Heading (deg)')
-        # plt.legend()
-        # plt.grid(True, which='both', axis='y')
-        # plt.yticks(np.arange(
-        #     int(np.floor(np.min(np.degrees(arr_heading)) / 90) * 90),
-        #     int(np.ceil(np.max(np.degrees(arr_heading)) / 90) * 90) + 1,
-        #     90
-        # ))
-        # plt.show()
+        plt.plot(np.degrees(arr_heading), 'r-', label='Heading (deg)')
+        plt.title('Cumulative Heading Change')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Heading (deg)')
+        plt.legend()
+        plt.grid(True, which='both', axis='y')
+        plt.yticks(np.arange(
+            int(np.floor(np.min(np.degrees(arr_heading)) / 90) * 90),
+            int(np.ceil(np.max(np.degrees(arr_heading)) / 90) * 90) + 1,
+            90
+        ))
+        plt.show()
 
         return np.vstack([pred_speed, pred_hc]).T, (traj_x, traj_y)
 
@@ -201,7 +199,7 @@ class TrajectoryPredictor:
         # start_indices 길이 == pred_speed 길이 이므로, 각 윈도우 시작 인덱스에 대응하는 GT를 뽑음
         # (필요하다면 윈도우 끝 지점 또는 중앙 지점을 기준으로 해도 무방. 여기서는 편의상 윈도우 시작 지점을 사용)
         
-        window = 50
+        window = self.window_size
         
         # 컬럼 초기화
         df['speed_1']   = np.nan
@@ -211,19 +209,31 @@ class TrajectoryPredictor:
         e = df['e_aug'].values
         n = df['n_aug'].values
 
-        for i in range(len(df) - window):
-            # (1) 1초 동안 이동 거리 → 속도 레이블
-            de = e[i + window] - e[i]
-            dn = n[i + window] - n[i]
-            df.at[i, 'speed_1'] = np.hypot(de, dn)
+        # for i in range(len(df) - window):
+        #     # (1) 1초 동안 이동 거리 → 속도 레이블
+        #     de = e[i + window] - e[i]
+        #     dn = n[i + window] - n[i]
+        #     df.at[i, 'speed_1'] = np.hypot(de, dn)
             
-            # (2) 1초 동안 헤딩 변화량 → heading 레이블
+        #     # (2) 1초 동안 헤딩 변화량 → heading 레이블
+        #     hd = np.arctan2(
+        #         np.diff(n[i : i + window]), 
+        #         np.diff(e[i : i + window])
+        #     )
+        #     hd = np.unwrap(hd)
+        #     df.at[i, 'heading_1'] = hd[-1] - hd[0]
+        
+        for i in range(len(df) - window):
+            # 창 내부의 순간 헤딩 시퀀스 (언랩하지 않음)
             hd = np.arctan2(
-                np.diff(n[i : i + window]), 
+                np.diff(n[i : i + window]),
                 np.diff(e[i : i + window])
             )
-            hd = np.unwrap(hd)
-            df.at[i, 'heading_1'] = hd[-1] - hd[0]
+            # 시작/끝 각도의 '주값 차이'만 계산
+            raw_delta = hd[-1] - hd[0]
+            delta = np.arctan2(np.sin(raw_delta), np.cos(raw_delta))  # [-π, π]
+
+            df.at[i, 'heading_1'] = delta
 
         # === 수정된 부분 ===
         # start_indices가 [0, 5, 10, 15, ...] 형태이므로, 해당 인덱스만큼 GT 값을 뽑아 길이를 맞춘다.
@@ -234,27 +244,37 @@ class TrajectoryPredictor:
         # -------------------------------
         # 4) GT Speed vs Pred Speed 비교 (두 배열 길이 동일)
         # -------------------------------
+        rmse_speed = np.sqrt(np.mean((gt_speed_windowed - pred_speed)**2))
+
         plt.figure(figsize=(10, 5))
-        plt.plot(gt_speed_windowed,  'b--', label='GT Speed (windowed)')
-        plt.plot(pred_speed * 10,    'r-',  label='Pred Speed (windowed)')
-        plt.title(f'GT vs Predicted Speed (stride={stride})')
+        plt.plot(gt_speed_windowed, 'b--', label='GT Speed (windowed)')
+        plt.plot(pred_speed * 10, 'r-', label='Pred Speed (windowed)')
+        plt.title(f'GT vs Predicted Speed (stride={stride})\nRMSE={rmse_speed:.3f}')
         plt.xlabel('Window Index')
         plt.ylabel('Speed (m/s)')
         plt.legend()
         plt.grid()
+        # 그래프에 텍스트 표시
+        plt.text(0.05, 0.9, f'RMSE = {rmse_speed:.3f}', transform=plt.gca().transAxes, fontsize=12,
+                bbox=dict(facecolor='white', alpha=0.7))
         plt.show()
 
         # -------------------------------
         # 5) GT Heading Change vs Pred Heading Change 비교 (두 배열 길이 동일)
         # -------------------------------
+        rmse_hc = np.sqrt(np.mean((gt_hc_windowed - pred_hc)**2))
+
         plt.figure(figsize=(10, 5))
-        plt.plot(gt_hc_windowed,   'b--', label='GT Heading Change (rad, windowed)')
-        plt.plot(pred_hc * 10,     'r-',  label='Pred Heading Change (rad, windowed)')
-        plt.title(f'GT vs Predicted Heading Change (stride={stride})')
+        plt.plot(gt_hc_windowed, 'b--', label='GT Heading Change (rad, windowed)')
+        plt.plot(pred_hc * 10, 'r-', label='Pred Heading Change (rad, windowed)')
+        plt.title(f'GT vs Predicted Heading Change (stride={stride})\nRMSE={rmse_hc:.3f}')
         plt.xlabel('Window Index')
         plt.ylabel('Heading Change (rad)')
         plt.legend()
         plt.grid()
+        # 그래프에 텍스트 표시
+        plt.text(0.05, 0.9, f'RMSE = {rmse_hc:.3f}', transform=plt.gca().transAxes, fontsize=12,
+                bbox=dict(facecolor='white', alpha=0.7))
         plt.show()
 
         # -------------------------------

@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from pyproj import Proj
 from scipy.interpolate import interp1d
+from scipy.interpolate import PchipInterpolator
 import math
 
 # 로거 설정
@@ -36,14 +37,16 @@ class DataProcessor:
 
     @staticmethod
     def load_and_preprocess_csv(file_path, skiprows=500, flag=False, zone=52):
+        
+        window_size = 200
         if flag:
             df = pd.read_csv(
-                file_path, skiprows=skiprows, skipfooter=100,
+                file_path, skiprows=skiprows, skipfooter=200,
                 na_values=['', 'nan', 'NaN'], engine='python'
             ).fillna(0)
         else:
             df = pd.read_csv(
-            file_path, skiprows=skiprows, skipfooter=100, engine='python'
+            file_path, skiprows=skiprows, skipfooter=200, engine='python'
             )
             
         df.columns = [
@@ -125,13 +128,19 @@ class DataProcessor:
         t_old = np.arange(M)                          
         t_new = np.linspace(0, M - 1, (M-1)*50 + 1)          
 
-        # 2) 선형 보간 함수 생성
-        f_e = interp1d(t_old, e_corr, kind='cubic')
-        f_n = interp1d(t_old, n_corr, kind='cubic')
+        # # 2) 선형 보간 함수 생성
+        # f_e = interp1d(t_old, e_corr, kind='cubic')
+        # f_n = interp1d(t_old, n_corr, kind='cubic')
 
-        # 3) 50개 포인트로 보간
-        e_aug = f_e(t_new)   # shape = (50,)
-        n_aug = f_n(t_new)   # shape = (50,)
+        # # 3) 50개 포인트로 보간
+        # e_aug = f_e(t_new)   # shape = (50,)
+        # n_aug = f_n(t_new)   # shape = (50,)
+        
+        f_e = PchipInterpolator(t_old.astype(float), e_corr.astype(float), extrapolate=True)
+        f_n = PchipInterpolator(t_old.astype(float), n_corr.astype(float), extrapolate=True)
+
+        e_aug = f_e(t_new.astype(float))
+        n_aug = f_n(t_new.astype(float))
         
         # df['e_aug'] = e_aug
         # df['n_aug'] = n_aug
@@ -145,7 +154,7 @@ class DataProcessor:
         e = df2['e_aug'].values  # shape = (T,)
         n = df2['n_aug'].values  # shape = (T,)
 
-        window_size = 200  # 1초 = 50샘플
+         
         num_wins = len(e) - window_size + 1
 
         # 결과 저장용
@@ -285,7 +294,7 @@ class DataProcessor:
     def load_and_preprocess_csv_test(file_path, skiprows=100):
         # ... 기존 테스트용 전처리 로직 그대로 유지 ...
         df = pd.read_csv(
-        file_path, skiprows=skiprows, engine='python'
+        file_path, skiprows=skiprows, skipfooter=0, engine='python'
         )
 
         df.columns = [
