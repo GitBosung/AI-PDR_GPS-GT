@@ -36,17 +36,16 @@ class DataProcessor:
         pass
 
     @staticmethod
-    def load_and_preprocess_csv(file_path, skiprows=500, flag=False, zone=52):
-        
-        window_size = 200
+    def load_and_preprocess_csv(file_path, skiprows=500, flag=False, zone=52, window_size=200):
+        # window_size = 200
         if flag:
             df = pd.read_csv(
-                file_path, skiprows=skiprows, skipfooter=200,
+                file_path, skiprows=skiprows, skipfooter=500,
                 na_values=['', 'nan', 'NaN'], engine='python'
             ).fillna(0)
         else:
             df = pd.read_csv(
-            file_path, skiprows=skiprows, skipfooter=200, engine='python'
+            file_path, skiprows=skiprows, skipfooter=500, engine='python'
             )
             
         df.columns = [
@@ -57,20 +56,14 @@ class DataProcessor:
             'Orientation x', 'Orientation y', 'Orientation z',
             'Pressure', 'Latitude', 'Longitude', 'Altitude', 'Speed_GPS'
         ]
-        
-        df['Acc_Norm'] = np.sqrt(df['Accelerometer x']**2 +
-                                 df['Accelerometer y']**2 +
-                                 df['Accelerometer z']**2)
-        
-        df['Gyro_Norm'] = np.sqrt(df['Gyroscope x']**2 +
-                                  df['Gyroscope y']**2 +
-                                  df['Gyroscope z']**2)
-        
 
         df['Time'] = pd.to_datetime(df['Time'], format='%Y-%m-%d %H:%M:%S.%f')
         start_dt = df['Time'].iloc[0]
         df['Elapsed Time'] = (df['Time'] - start_dt).dt.total_seconds()
         
+        df['Acc_Norm'] = np.linalg.norm(df[['Accelerometer x', 'Accelerometer y', 'Accelerometer z']].values, axis=1)
+        df['Gyro_Norm'] = np.linalg.norm(df[['Gyroscope x', 'Gyroscope y', 'Gyroscope z']].values, axis=1)
+
         if flag:
             # (기존 원본 로직 그대로 유지)
             valid_gps_mask = (
@@ -112,9 +105,149 @@ class DataProcessor:
             e = np.array(e)
             n = np.array(n)
                 
-        # ------------------------------------------------------------------
-        # 5) 1Hz 궤적 보정: 초기 heading 회전 정렬
-        # ------------------------------------------------------------------
+        # -------------------------------------------------------
+        # (3) Outlier 탐지
+        # -------------------------------------------------------
+        use_iqr=True
+        dx = np.diff(e); dy = np.diff(n)
+        speed = np.hypot(dx, dy)
+        heading = np.arctan2(dy, dx)
+
+        def remove_outliers_iqr(values, k=1.5):
+            q1, q3 = np.percentile(values, [25, 75])
+            iqr = q3 - q1
+            return (values >= q1 - k*iqr) & (values <= q3 + k*iqr)
+
+        def remove_outliers_zscore(values, threshold=3.0):
+            mean, std = np.mean(values), np.std(values)
+            return np.abs((values-mean)/(std+1e-8)) < threshold
+
+        if use_iqr:
+            mask_speed = remove_outliers_iqr(speed)
+            mask_heading = remove_outliers_iqr(np.degrees(heading))
+        else:
+            mask_speed = remove_outliers_zscore(speed)
+            mask_heading = remove_outliers_zscore(np.degrees(heading))
+
+        mask = mask_speed & mask_heading
+        gps_idx_all = np.arange(1, len(e))
+        bad_idx = gps_idx_all[~mask]
+
+        # -------------------------------------------------------
+        # (4) 센서데이터 블록 drop (1Hz GPS → 50Hz 센서)
+        # -------------------------------------------------------
+        drop_idx = []
+        for gi in bad_idx:
+            start = gi*50
+            end   = (gi+1)*50
+            drop_idx.extend(range(start, min(end, len(df))))
+        df = df.drop(drop_idx).reset_index(drop=True)
+        
+        if flag:
+            # --- NaN 있는 경우: 유효 GPS만 모아서 다시 ENU trajectory 계산 ---
+            valid_gps_mask = (
+                df['Latitude'].notna() & df['Longitude'].notna() &
+                (df['Latitude'].astype(str).str.strip() != '') &
+                (df['Longitude'].astype(str).str.strip() != '')
+            )
+            valid_lat = pd.to_numeric(df.loc[valid_gps_mask, 'Latitude'], errors='coerce')
+            valid_lon = pd.to_numeric(df.loc[valid_gps_mask, 'Longitude'], errors='coerce')
+            final_mask = valid_lat.notna() & valid_lon.notna()
+            valid_lat = valid_lat[final_mask].values
+            valid_lon = valid_lon[final_mask].values
+            
+            if len(valid_lat) < 2:
+                raise ValueError("유효 GPS가 drop 이후 2개 미만으로 남음")
+
+            proj_enu = Proj(proj='utm', zone=zone, ellps='WGS84', south=False)
+            e0, n0 = proj_enu(valid_lon[0], valid_lat[0])
+            e_valid, n_valid = proj_enu(valid_lon, valid_lat)
+            e, n = e_valid - e0, n_valid - n0
+
+        else:
+            # --- NaN 없는 경우: 센서 50Hz 중간 샘플 뽑기 ---
+            M = len(df)
+            n_sec = M // 50
+            e, n = [], []
+            for i in range(n_sec):
+                idx = min(i*50 + 25, M-1)
+                e.append(df['E'].iloc[idx])
+                n.append(df['N'].iloc[idx])
+            e, n = np.array(e), np.array(n)
+        
+        # # -------------------------------------------------------
+        # # (5) 초기 heading 정렬 + 보간
+        # # -------------------------------------------------------
+        # dx0, dy0 = e[1]-e[0], n[1]-n[0]
+        # theta0 = math.atan2(dy0, dx0)
+        # R0 = np.array([[math.cos(-theta0), -math.sin(-theta0)],
+        #             [math.sin(-theta0),  math.cos(-theta0)]])
+        # coords = np.vstack([e-e[0], n-n[0]])
+        # rotated = R0 @ coords
+        # e_corr, n_corr = rotated[0], rotated[1]
+
+        # delta_e = np.diff(e_corr)
+        # delta_n = np.diff(n_corr)
+        
+        # speed_1hz = np.hypot(delta_e, delta_n)
+        # heading_change_1hz = np.diff(np.unwrap(np.arctan2(delta_n, delta_e)))
+
+        # N = len(speed_1hz)
+        # N2 = len(heading_change_1hz)
+        
+        # t_old  = np.arange(N)
+        # t_new  = np.linspace(0, N - 1, (N - 1) * 50 + 1)
+
+        # t_old2 = np.arange(N2)   # hz1_v 길이에 맞춤
+        # t_new2 = np.linspace(0, N2 - 1, (N2 - 1) * 50 + 1)
+
+        # f_h_cubic = interp1d(t_old2, heading_change_1hz, kind='cubic', fill_value="extrapolate")
+        # f_v_cubic = interp1d(t_old,  speed_1hz, kind='cubic', fill_value="extrapolate")
+
+        # interp_h = f_h_cubic(t_new2)
+        # interp_v = f_v_cubic(t_new)
+        
+        
+        # add_num = window_size // 50
+        
+        # n_sec_speed = []
+        # n_sec_dh = []
+        
+        # for i in range(len(interp_h)):
+        #     n_sec_speed.append(interp_v[i:i+add_num].sum())
+        #     n_sec_dh.append(interp_h[i:i+add_num].sum()/add_num)
+            
+        # n_sec_speed = np.array(n_sec_speed)
+        # n_sec_dh = np.array(n_sec_dh)
+             
+        # num_wins = len(n_sec_speed) - window_size + 1
+        
+        # sensor_cols = ['Accelerometer x','Accelerometer y','Accelerometer z',
+        #                 'Gyroscope x','Gyroscope y','Gyroscope z',
+        #                 'Acc_Norm',
+        #                 'Gyro_Norm']
+        
+        # sensor = df[sensor_cols].values  # shape = (T,6)
+
+        # # X = np.zeros((num_wins, window_size, len(sensor_cols)), dtype=np.float32)
+        # # for i in range(num_wins):
+        # #     X[i] = sensor[i : i+window_size]
+
+        # # Y = np.vstack([n_sec_speed, n_sec_dh]).T
+        # num_wins_sensor = len(sensor) - window_size + 1
+        # num_wins_label  = len(n_sec_speed) - window_size + 1
+        # num_wins = min(num_wins_sensor, num_wins_label)
+
+        # X = np.zeros((num_wins, window_size, len(sensor_cols)), dtype=np.float32)
+        # for i in range(num_wins):
+        #     X[i] = sensor[i : i+window_size]
+
+        # Y_all = np.vstack([n_sec_speed, n_sec_dh]).T
+        # Y = Y_all[window_size-1 : window_size-1+num_wins]
+        
+            # -------------------------------------------------------
+        # (5) 초기 heading 정렬 + 보간
+        # -------------------------------------------------------
         dx0, dy0 = e[1]-e[0], n[1]-n[0]
         theta0 = math.atan2(dy0, dx0)
         R0 = np.array([[math.cos(-theta0), -math.sin(-theta0)],
@@ -122,173 +255,78 @@ class DataProcessor:
         coords = np.vstack([e-e[0], n-n[0]])
         rotated = R0 @ coords
         e_corr, n_corr = rotated[0], rotated[1]
+
+        delta_e = np.diff(e_corr)
+        delta_n = np.diff(n_corr)
         
-        # 1) 보간용 원본 인덱스와 타겟 인덱스 생성
-        M = len(e_corr)
-        t_old = np.arange(M)                          
-        t_new = np.linspace(0, M - 1, (M-1)*50 + 1)          
-
-        # # 2) 선형 보간 함수 생성
-        # f_e = interp1d(t_old, e_corr, kind='cubic')
-        # f_n = interp1d(t_old, n_corr, kind='cubic')
-
-        # # 3) 50개 포인트로 보간
-        # e_aug = f_e(t_new)   # shape = (50,)
-        # n_aug = f_n(t_new)   # shape = (50,)
+        speed_1hz = np.hypot(delta_e, delta_n)
+        heading_change_1hz = np.diff(np.unwrap(np.arctan2(delta_n, delta_e)))
+        n_sec_hc = []
+        n_sec_speed = []
+        add_num = window_size // 50
         
-        f_e = PchipInterpolator(t_old.astype(float), e_corr.astype(float), extrapolate=True)
-        f_n = PchipInterpolator(t_old.astype(float), n_corr.astype(float), extrapolate=True)
-
-        e_aug = f_e(t_new.astype(float))
-        n_aug = f_n(t_new.astype(float))
+        for i in range(len(heading_change_1hz)):
+            n_sec_speed.append(speed_1hz[i:i+add_num].sum())
+            n_sec_hc.append(heading_change_1hz[i:i+add_num].sum())
         
-        # df['e_aug'] = e_aug
-        # df['n_aug'] = n_aug
-        
-        df2 = df.iloc[:len(e_aug)].copy()
-
-        # 2) 그 위에 보간 결과를 할당
-        df2['e_aug'] = e_aug
-        df2['n_aug'] = n_aug
-        
-        e = df2['e_aug'].values  # shape = (T,)
-        n = df2['n_aug'].values  # shape = (T,)
-
-         
-        num_wins = len(e) - window_size + 1
-
-        # 결과 저장용
-        y_speed = np.zeros(num_wins)
-        y_dh    = np.zeros(num_wins)
-        
-        # 5) Norm 채널 추가
-        df2['Acc_Norm']  = np.linalg.norm(
-            df2[['Accelerometer x','Accelerometer y','Accelerometer z']].values,
-            axis=1
-        )
-        df2['Gyro_Norm'] = np.linalg.norm(
-            df2[['Gyroscope x','Gyroscope y','Gyroscope z']].values,
-            axis=1
-        )
-        
-
-        # for i in range(num_wins):
-        #     we = e[i : i+window_size]   # window of Eastings
-        #     wn = n[i : i+window_size]   # window of Northings
-
-        #     # 1) 속도: 시작점→종료점 직선 이동 거리 (m/s)
-        #     dx = we[-1] - we[0]
-        #     dy = wn[-1] - wn[0]
-        #     dist = np.hypot(dx, dy)    # sqrt(dx^2 + dy^2)
-        #     y_speed[i] = dist          # 1초 동안 이동거리 = 속도(m/s)
-
-        #     # 2) 방향변화량: 각 샘플 간 heading 변화를 누적
+        n_sec_speed = np.array(n_sec_speed)
+        n_sec_hc = np.array(n_sec_hc)    
             
-        #     headings = np.arctan2(np.diff(wn), np.diff(we))
-        #     headings = np.unwrap(headings)
+        N = len(n_sec_speed)
+        N2 = len(n_sec_hc)
+        
+        t_old  = np.arange(N)
+        t_new  = np.linspace(0, N - 1, (N - 1) * 50 + 1)
 
-        #     # Δheading 원본
-        #     raw_delta = headings[-1] - headings[0]
+        t_old2 = np.arange(N2)   # hz1_v 길이에 맞춤
+        t_new2 = np.linspace(0, N2 - 1, (N2 - 1) * 50 + 1)
+
+        f_h_cubic = interp1d(t_old2, n_sec_hc, kind='cubic', fill_value="extrapolate")
+        f_v_cubic = interp1d(t_old,  n_sec_speed, kind='cubic', fill_value="extrapolate")
+
+        interp_h = f_h_cubic(t_new2)
+        interp_v = f_v_cubic(t_new)
+        
+        
+        # n_sec_speed = []
+        # n_sec_dh = []
+        
+        # for i in range(len(interp_h)):
+        #     n_sec_speed.append(interp_v[i:i+add_num].sum())
+        #     n_sec_dh.append(interp_h[i:i+add_num].sum()/add_num)
             
-        #     dh = np.diff(headings)
-        #     total_delta = np.sum(dh)
-
-        #     # # 소프트 데드존 적용
-        #     # if abs(raw_delta) < threshold:
-        #     #     delta = 0
-        #     # else:
-        #     #     delta = np.sign(raw_delta) * (abs(raw_delta) - threshold)
-
-        #     y_dh[i] = total_delta
-            
-        for i in range(num_wins):
-            we = e[i : i+window_size]   # window of Eastings
-            wn = n[i : i+window_size]   # window of Northings
-
-            # 1) 속도: 시작점→종료점 직선 이동 거리 (m)
-            dx = we[-1] - we[0]
-            dy = wn[-1] - wn[0]
-            dist = np.hypot(dx, dy)
-            y_speed[i] = dist
-
-            # 2) 방향변화량: 벡터 간 회전각 누적 (언랩 불필요)
-            vel_x = np.diff(we)   # ΔE
-            vel_y = np.diff(wn)   # ΔN
-            spd   = np.hypot(vel_x, vel_y)
-
-            EPS = 0.02  # 데이터 스케일에 맞게 조정(예: 1~5cm 이동 임계)
-            valid = spd > EPS
-
-            if np.count_nonzero(valid) >= 3:
-                vx = vel_x[valid]
-                vy = vel_y[valid]
-
-                # (k -> k+1) 회전각: atan2(cross, dot) ∈ (-π, π)
-                cross = vx[:-1]*vy[1:] - vy[:-1]*vx[1:]
-                dot   = vx[:-1]*vx[1:] + vy[:-1]*vy[1:]
-                delta_angles = np.arctan2(cross, dot)
-
-                total_delta = np.sum(delta_angles)
-
-                # 최종 정규화 선택 (원하면 사용)
-                total_delta = (total_delta + np.pi) % (2*np.pi) - np.pi
-            else:
-                total_delta = 0.0
-
-            y_dh[i] = total_delta
-            
+        # n_sec_speed = np.array(n_sec_speed)
+        # n_sec_dh = np.array(n_sec_dh)
+    
+        
+                
+        num_wins = len(n_sec_speed) - window_size + 1
+        
         sensor_cols = ['Accelerometer x','Accelerometer y','Accelerometer z',
                         'Gyroscope x','Gyroscope y','Gyroscope z',
                         'Acc_Norm',
                         'Gyro_Norm']
         
-        sensor = df2[sensor_cols].values  # shape = (T,6)
+        sensor = df[sensor_cols].values  # shape = (T,6)
+
+        # X = np.zeros((num_wins, window_size, len(sensor_cols)), dtype=np.float32)
+        # for i in range(num_wins):
+        #     X[i] = sensor[i : i+window_size]
+
+        # Y = np.vstack([n_sec_speed, n_sec_dh]).T
+        num_wins_sensor = len(sensor) - window_size + 1
+        num_wins_label  = len(interp_h) - window_size + 1
+        num_wins = min(num_wins_sensor, num_wins_label)
 
         X = np.zeros((num_wins, window_size, len(sensor_cols)), dtype=np.float32)
         for i in range(num_wins):
             X[i] = sensor[i : i+window_size]
 
-        # (2) Y 결합
-        Y = np.vstack([y_speed, y_dh]).T   # shape = (num_wins, 2)
+        Y = np.vstack([interp_v, interp_h]).T
+        Y = Y[:num_wins]
                 
-        return df2, X, Y
-    
-    
-        # M = len(df)
-        # sensor_windows = []
-        # for i in range(0, M-50+1):
-        #     arr = np.stack([
-        #         df['Accelerometer x'].values[i:i+50],
-        #         df['Accelerometer y'].values[i:i+50],
-        #         df['Accelerometer z'].values[i:i+50],
-        #         df['Gyroscope x'].values[i:i+50],
-        #         df['Gyroscope y'].values[i:i+50],
-        #         df['Gyroscope z'].values[i:i+50],
-        #         df['Acc_Norm'].values[i:i+50],
-        #         df['Gyro_Norm'].values[i:i+50],
-        #     ], axis=1)  # (50,8)
-
-
-        #     sensor_windows.append(arr)
-
-        # # ------------------------------------------------------------------
-        # # 9–10) X, Y 생성
-        # # ------------------------------------------------------------------
-        # usable = min(len(sensor_windows), len(speed_1), len(heading_1))
-        # X = np.stack(sensor_windows[:usable], axis=0)  # (usable,50,38)
-        # Y = np.stack([speed_1[:usable], heading_1[:usable]], axis=1)
-
-        # # ------------------------------------------------------------------
-        # # 11) 원본 df에 speed_1, heading_1 컬럼 추가
-        # # ------------------------------------------------------------------
-        # df['speed_1']   = np.nan
-        # df['heading_1'] = np.nan
-        # for j in range(usable):
-        #     df.at[j, 'speed_1']   = speed_1[j]
-        #     df.at[j, 'heading_1'] = heading_1[j]
-
-        # return df, X, Y
-
+        return df, X, Y
+        
     #delimiter=',', header=0, 
     @staticmethod
     def load_and_preprocess_csv_test(file_path, skiprows=100):
