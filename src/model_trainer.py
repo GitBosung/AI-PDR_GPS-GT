@@ -4,11 +4,15 @@ from datetime import datetime
 import joblib
 
 import tensorflow as tf
-from tensorflow.keras.models import load_model
-from tensorflow.keras.layers import LSTM, Dense, MultiHeadAttention, LayerNormalization, Add, Input, GlobalAveragePooling1D, Dropout
+from tensorflow.keras.models import load_model, Model
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import Huber
+from tensorflow.keras.layers import (
+    Input, LSTM, Dense, LayerNormalization, Add,
+    MultiHeadAttention, Lambda, Dropout, Concatenate, GlobalAveragePooling1D, SpatialDropout1D, 
+    Conv1D
+)
 
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 from sklearn.model_selection import train_test_split
@@ -31,72 +35,134 @@ class ModelTrainer:
         self.y_speed_scaler = None
         self.y_hc_scaler = None
         self.model = None
-    
-    
-    def build_model(self):
-        if self.num_features is None:
-            raise ValueError("num_features가 설정되지 않았습니다.") 
+        self.feature_map = {
+            "acc_axes":   [0,1,2],
+            "gyro_axes":  [3,4,5],
+            "acc_norm":   6,     
+            "gyro_norm":  7,
+        }
+        self.use_concat = True
         
-        inputs = Input(shape=(self.window_size, self.num_features))
+    def build_model(self):
+        inputs = Input(shape=(self.window_size, self.num_features))  
 
-        # 1) 첫 LSTM
-        x = LSTM(128, return_sequences=True)(inputs)
-        x = Dropout(0.2)(x)
+        x = LSTM(64, return_sequences=True)(inputs)   
+        x = LSTM(32, return_sequences=False)(x)        
 
-        # 2) 두 번째 LSTM
-        x = LSTM(128, return_sequences=True)(x)
-        x = Dropout(0.2)(x)
+        outputs = Dense(2)(x)            
 
-        # 3) Attention (Self-Attention)
-        x_norm = LayerNormalization()(x)
-        attn = MultiHeadAttention(num_heads=4, key_dim=32)(x_norm, x_norm)
-        x = Add()([x, attn])   # Residual 연결
+        self.model = tf.keras.Model(inputs, outputs)
 
-        # 4) 출력
-        x = GlobalAveragePooling1D()(x)  # 시퀀스를 요약 (Dense 전 Flatten 역할)
-        outputs = Dense(2)(x)
-
-        self.model = tf.keras.Model(inputs, outputs, name="LSTM_Attention_Simplified")
         self.model.compile(
-            optimizer=Adam(learning_rate=1e-4, clipnorm=1.0),
-            loss=tf.keras.losses.Huber(delta=1.0),
+            optimizer=Adam(learning_rate=1e-3),
+            #optimizer=Adam(learning_rate=5e-4),
+            loss='mse',
             metrics=['mae']
         )
         return self.model
     
+    
+    # def build_model(self):
+    #     inputs = Input(shape=(self.window_size, self.num_features))  # (B,T,F)
+
+    #     # 기본 LSTM 스택 (기존과 동일)
+    #     x = LSTM(64, return_sequences=True)(inputs)   # (B,T,64)
+    #     x = LSTM(32, return_sequences=True)(x)        # (B,T,32)
+
+    #     # --- Attention (Single-Query) ---
+    #     last = Lambda(lambda t: t[:, -1:, :])(x)            # (B,1,32) ← 쿼리
+    #     #x_ln = LayerNormalization()(x)                       # 안정화 (Pre-LN)
+    #     attn = MultiHeadAttention(num_heads=4, key_dim=32)(
+    #         last, x, x
+    #     )                                                    # (B,1,32)
+    #     h = Add()([last, attn])                              # Residual
+    #     #h = LayerNormalization()(h)
+    #     h = Lambda(lambda t: t[:, 0, :])(h)                  # (B,32)
+
+    #     outputs = Dense(2)(h)
+
+    #     self.model = tf.keras.Model(inputs, outputs)
+    #     self.model.compile(
+    #         optimizer=Adam(learning_rate=5e-4),  
+    #         loss=Huber(),                        
+    #         metrics=['mae']
+    #     )
+    #     return self.model
+        
+    
     def scale_sensor_data(self, X: np.ndarray, fit: bool = True) -> np.ndarray:
-        n_s, w, f = X.shape
-        flat = X.reshape(-1, f)
-        scaled = np.zeros_like(flat, dtype=np.float32)
+        """
+        - acc 3축, gyro 3축을 각각 '그룹'으로 묶어 하나의 μ,σ(스칼라)로 표준화
+        - acc_norm, gyro_norm도 기존 값 그대로 개별 스케일링
+        """
+        if X.ndim != 3:
+            raise ValueError("X must be 3D: (N, T, F)")
+        N, T, F = X.shape
+        eps = 1e-8
+
+        X2d = X.reshape(-1, F).astype(np.float32)
+        out = X2d.copy()
 
         if fit:
             self.sensor_scalers = {}
 
-        for idx in range(f):
-            col = flat[:, idx:idx+1]
-            if fit:
-                scaler = MinMaxScaler(feature_range=(-1, 1))
-                #scaler = StandardScaler()
-                flat_s = scaler.fit_transform(col)
-                self.sensor_scalers[idx] = scaler
-            else:
-                flat_s = self.sensor_scalers[idx].transform(col)
-            scaled[:, idx] = flat_s.ravel()
+        acc_axes   = self.feature_map.get("acc_axes", [])
+        gyro_axes  = self.feature_map.get("gyro_axes", [])
+        acc_norm_i = self.feature_map.get("acc_norm", None)
+        gyro_norm_i= self.feature_map.get("gyro_norm", None)
 
-        return scaled.reshape(n_s, w, f)
+        # --- (A) 그룹 표준화 (acc, gyro 3축 각각 하나의 μ, σ) ---
+        if acc_axes:
+            if fit:
+                block = X2d[:, acc_axes]
+                mu = float(block.mean())
+                sigma = float(block.std()) + eps
+                self.sensor_scalers["acc_group"] = {"mu": mu, "sigma": sigma, "idxs": acc_axes}
+            p = self.sensor_scalers["acc_group"]
+            out[:, acc_axes] = (out[:, acc_axes] - p["mu"]) / p["sigma"]
+
+        if gyro_axes:
+            if fit:
+                block = X2d[:, gyro_axes]
+                mu = float(block.mean())
+                sigma = float(block.std()) + eps
+                self.sensor_scalers["gyro_group"] = {"mu": mu, "sigma": sigma, "idxs": gyro_axes}
+            p = self.sensor_scalers["gyro_group"]
+            out[:, gyro_axes] = (out[:, gyro_axes] - p["mu"]) / p["sigma"]
+
+        # --- (B) Norm 채널도 개별 스케일링 ---
+        if acc_norm_i is not None:
+            if fit:
+                mu = float(X2d[:, acc_norm_i].mean())
+                sigma = float(X2d[:, acc_norm_i].std()) + eps
+                self.sensor_scalers["acc_norm"] = {"mu": mu, "sigma": sigma, "idx": acc_norm_i}
+            p = self.sensor_scalers["acc_norm"]
+            out[:, acc_norm_i] = (out[:, acc_norm_i] - p["mu"]) / p["sigma"]
+
+        if gyro_norm_i is not None:
+            if fit:
+                mu = float(X2d[:, gyro_norm_i].mean())
+                sigma = float(X2d[:, gyro_norm_i].std()) + eps
+                self.sensor_scalers["gyro_norm"] = {"mu": mu, "sigma": sigma, "idx": gyro_norm_i}
+            p = self.sensor_scalers["gyro_norm"]
+            out[:, gyro_norm_i] = (out[:, gyro_norm_i] - p["mu"]) / p["sigma"]
+
+        return out.reshape(N, T, F).astype(np.float32)
+
+
 
     def train_model(self, X: np.ndarray, Y: np.ndarray):
-        X_tr, X_te, Y_tr, Y_te = train_test_split(X, Y, test_size=0.2, random_state=1217)
+        X_tr, X_te, Y_tr, Y_te = train_test_split(X, Y, test_size=0.2, random_state=42)
 
         self.num_features = X_tr.shape[2]
 
         X_tr_s = self.scale_sensor_data(X_tr, fit=True)
         X_te_s = self.scale_sensor_data(X_te, fit=False)
 
-        # self.y_speed_scaler = StandardScaler()
-        # self.y_hc_scaler = StandardScaler()
-        self.y_speed_scaler = MinMaxScaler(feature_range=(-1, 1))
-        self.y_hc_scaler    = MinMaxScaler(feature_range=(-1, 1))
+        self.y_speed_scaler = StandardScaler()
+        self.y_hc_scaler = StandardScaler()
+        # self.y_speed_scaler = MinMaxScaler(feature_range=(-1, 1))
+        # self.y_hc_scaler    = MinMaxScaler(feature_range=(-1, 1))
         
         y1 = self.y_speed_scaler.fit_transform(Y_tr[:, :1])
         y2 = self.y_hc_scaler.fit_transform(Y_tr[:, 1:2])
@@ -109,8 +175,8 @@ class ModelTrainer:
         self.build_model()
         
         callbacks = [
-            EarlyStopping(monitor='val_loss', patience=15, min_delta=1e-4, restore_best_weights=True),
-            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6, cooldown=2),
+            #EarlyStopping(monitor='val_loss', patience=5, min_delta=5e-4, restore_best_weights=True),
+            #ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6, cooldown=2),
             ModelCheckpoint("best_model.h5", monitor="val_loss", save_best_only=True, verbose=0),
         ]
         
@@ -124,49 +190,6 @@ class ModelTrainer:
         )
         return history
     
-        # train_model 함수를 아래 내용으로 교체!
-    # def train_model(self, X_tr: np.ndarray, Y_tr: np.ndarray, X_te: np.ndarray, Y_te: np.ndarray):
-    #     """
-    #     미리 분할된 훈련(tr) 및 검증(te) 데이터를 받아 모델을 학습시킵니다.
-    #     """
-    #     # 자동 num_features 설정
-    #     self.num_features = X_tr.shape[2]
-
-    #     # 2) X 스케일 (훈련 데이터 기준으로 fit)
-    #     X_tr_s = self.scale_sensor_data(X_tr, fit=True)
-    #     X_te_s = self.scale_sensor_data(X_te, fit=False)
-
-    #     # 3) Y 스케일 (훈련 데이터 기준으로 fit)
-    #     self.y_speed_scaler = StandardScaler()
-    #     self.y_hc_scaler    = StandardScaler()
-        
-    #     y1_tr = self.y_speed_scaler.fit_transform(Y_tr[:, :1])
-    #     y2_tr = self.y_hc_scaler.fit_transform(Y_tr[:, 1:2])
-    #     Y_tr_s = np.hstack([y1_tr, y2_tr]).astype(np.float32)
-
-    #     y1_te = self.y_speed_scaler.transform(Y_te[:, :1])
-    #     y2_te = self.y_hc_scaler.transform(Y_te[:, 1:2])
-    #     Y_te_s = np.hstack([y1_te, y2_te]).astype(np.float32)
-
-    #     # 4) 모델 구성 & 학습
-    #     self.build_model()
-        
-    #     callbacks = [
-    #         EarlyStopping(monitor='val_loss', patience=15, min_delta=1e-4, restore_best_weights=True),
-    #         ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6, cooldown=2),
-    #         ModelCheckpoint("best_model.h5", monitor="val_loss", save_best_only=True, verbose=0),
-    #     ]
-        
-    #     history = self.model.fit(
-    #         X_tr_s, Y_tr_s,
-    #         validation_data=(X_te_s, Y_te_s), # 검증 데이터로 X_te_s, Y_te_s 사용
-    #         batch_size=self.batch_size,
-    #         epochs=self.epochs,
-    #         callbacks=callbacks,
-    #         verbose=1
-    #     )
-    #     return history
-
     def save_model(self, model_dir='saved_models'):
         os.makedirs(model_dir, exist_ok=True)
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')

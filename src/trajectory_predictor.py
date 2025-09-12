@@ -17,34 +17,84 @@ class TrajectoryPredictor:
         self.y_hc_scaler = y_hc_scaler
         self.window_size = window_size
 
-    def _prepare_windows(self, df: pd.DataFrame, stride: int = 5) -> np.ndarray:
+    @staticmethod
+    def _apply_group_scale(win_2d: np.ndarray, scaler_entry, axes, eps=1e-8):
         """
-        df: DataProcessor.load_and_preprocess_csv로 처리된 DataFrame
-        stride: 윈도우 이동 간격
-        returns: shape = (num_windows, window_size, num_features=38)
+        win_2d: (W, F) 윈도우
+        scaler_entry:
+        - (A) StandardScaler 객체  → .transform 사용
+        - (B) dict {"mu":..., "sigma":..., "idxs":[...]} → 수식 적용
+        axes: 그룹 축 인덱스 (예: [0,1,2])
         """
-        M = len(df)
-        windows = []
-
-        for start in range(0, M - self.window_size + 1, stride):
-            # a) 원본 8채널 수집
-            arr = df[['Accelerometer x','Accelerometer y','Accelerometer z',
-                      'Gyroscope x','Gyroscope y','Gyroscope z',
-                      'Acc_Norm','Gyro_Norm']].iloc[start:start+self.window_size].values
-
-            window = arr
-
-            # d) 스케일링 적용
-            flat = window.reshape(-1, window.shape[1])             
-            scaled_flat = np.zeros_like(flat, dtype=np.float32)
-            for idx in range(flat.shape[1]):
-                scaled_flat[:, idx] = self.sensor_scalers[idx].transform(flat[:, idx:idx+1]).ravel()
-            window_scaled = scaled_flat.reshape(self.window_size, -1) 
-
-            windows.append(window_scaled)
-
-        return np.array(windows, dtype=np.float32)
+        if scaler_entry is None:
+            return win_2d
+        if hasattr(scaler_entry, "transform"):
+            # (A) StandardScaler 같은 sklearn 객체
+            win_2d[:, axes] = scaler_entry.transform(win_2d[:, axes])
+        else:
+            # (B) dict 저장된 그룹 파라미터
+            mu = scaler_entry.get("mu", 0.0)
+            sigma = scaler_entry.get("sigma", 1.0) + eps
+            win_2d[:, axes] = (win_2d[:, axes] - mu) / sigma
+        return win_2d
+    @staticmethod
+    def _apply_scalar_scale(vec_1d: np.ndarray, scaler_entry, eps=1e-8):
+        """
+        vec_1d: (W,) 혹은 (W,1)
+        scaler_entry:
+        - (A) StandardScaler 등 sklearn 객체 → .transform 사용
+        - (B) dict {"mu":..., "sigma":...} → 수식 적용
+        """
+        if scaler_entry is None:
+            return vec_1d
+        if hasattr(scaler_entry, "transform"):
+            # vec_1d shape 보정
+            v = vec_1d.reshape(-1, 1)
+            v = scaler_entry.transform(v)
+            return v.ravel()
+        else:
+            mu = float(scaler_entry.get("mu", 0.0))
+            sigma = float(scaler_entry.get("sigma", 1.0)) + eps
+            return (vec_1d - mu) / sigma
     
+    
+    def _prepare_windows(self, df: pd.DataFrame, stride: int = 5) -> np.ndarray:
+        cols = ['Accelerometer x','Accelerometer y','Accelerometer z',
+                'Gyroscope x','Gyroscope y','Gyroscope z',
+                'Acc_Norm', 'Gyro_Norm']
+        arr = df[cols].values.astype(np.float32)
+
+        M = len(df)
+        W = self.window_size
+        wins = []
+
+        acc_axes  = [0,1,2]
+        gyro_axes = [3,4,5]
+        acc_norm_idx, gyro_norm_idx = 6, 7
+        
+
+        sc_acc   = self.sensor_scalers.get("acc_group", None)
+        sc_gyro  = self.sensor_scalers.get("gyro_group", None)
+        sc_anorm = self.sensor_scalers.get("acc_norm", None)   # ← Trainer에서 저장된 항목 사용
+        sc_gnorm = self.sensor_scalers.get("gyro_norm", None)
+
+        for start in range(0, M - W + 1, stride):
+            win = arr[start:start+W].copy()  # (W, 8)
+
+            # --- (1) acc/gyro 3축 그룹 스케일 ---
+            win = self._apply_group_scale(win, sc_acc,  acc_axes)
+            win = self._apply_group_scale(win, sc_gyro, gyro_axes)
+
+            # --- (2) Norm은 '재계산'하지 않고, 기존 값에 스케일만 적용 ---
+            if acc_norm_idx is not None:
+                win[:, acc_norm_idx] = self._apply_scalar_scale(win[:, acc_norm_idx], sc_anorm)
+            if gyro_norm_idx is not None:
+                win[:, gyro_norm_idx] = self._apply_scalar_scale(win[:, gyro_norm_idx], sc_gnorm)
+
+            wins.append(win)
+
+        return np.array(wins, dtype=np.float32)
+
 
     def predict_and_plot_trajectory(self, df: pd.DataFrame, plag_1Hz: bool = False):
         """
@@ -53,10 +103,10 @@ class TrajectoryPredictor:
         2) 예측된 속도·헤딩을 plot
         3) 예측 궤적(accumulate) plot
         """
-        
-        stride = self.window_size if plag_1Hz else 1
 
-        #stride = 1       
+        stride = self.window_size if plag_1Hz else 5
+
+        #stride = 1
         X = self._prepare_windows(df, stride)  # shape = (num_windows, window_size, num_features)
 
         # 1) 모델 예측 (스케일된 Y_pred_scaled)
@@ -156,11 +206,11 @@ class TrajectoryPredictor:
         """
 
         # ===== 1) stride 결정 및 윈도우 시작 인덱스 목록 생성 =====
-        stride = self.window_size if plag_1Hz else 1
+        stride = self.window_size if plag_1Hz else self.window_size // 10
         window_size = self.window_size
 
         # ===== 2) 윈도우 단위 예측 =====
-        X = self._prepare_windows(df, 1)   # (num_windows, window_size, num_features)
+        X = self._prepare_windows(df, stride)   # (num_windows, window_size, num_features)
         Y_pred_scaled = self.model.predict(X)           # (num_windows, 2)
 
         # 스케일 복원
