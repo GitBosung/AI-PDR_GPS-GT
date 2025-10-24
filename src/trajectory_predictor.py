@@ -96,7 +96,7 @@ class TrajectoryPredictor:
         return np.array(wins, dtype=np.float32)
 
 
-    def predict_and_plot_trajectory(self, df: pd.DataFrame, plag_1Hz: bool = False):
+    def predict_and_plot_trajectory(self, df: pd.DataFrame, plag_1Hz: bool = False, title: str = "" ):
         """
         df에는 load_and_preprocess_csv 로 얻은 원본 50Hz DataFrame이 들어온다고 가정.
         1) plag_1Hz=False → stride=5, plag_1Hz=True → stride=50 로 윈도우 생성하여 예측 (스케일 복원 포함)
@@ -104,7 +104,7 @@ class TrajectoryPredictor:
         3) 예측 궤적(accumulate) plot
         """
 
-        stride = self.window_size if plag_1Hz else 5
+        stride = self.window_size if plag_1Hz else self.window_size // 10
 
         #stride = 1
         X = self._prepare_windows(df, stride)  # shape = (num_windows, window_size, num_features)
@@ -165,17 +165,25 @@ class TrajectoryPredictor:
         # -------------------------------
         # Predicted Movement Trajectory plot
         # -------------------------------
-        plt.figure(figsize=(8, 6))
-        plt.plot(traj_x, traj_y, 'b-o', alpha=0.7, markersize=4, label='Predicted Path')
-        plt.scatter([traj_x[0]], [traj_y[0]], c='green', s=80, label='Start')
-        plt.scatter([traj_x[-1]], [traj_y[-1]], c='red',   s=80, label='End')
-        plt.title(f'Predicted Movement Trajectory (stride={stride})')
-        plt.xlabel('Easting (m)')
-        plt.ylabel('Northing (m)')
+        plt.figure(figsize=(8, 8))
+        plt.plot(traj_x, traj_y, 'b-', alpha=0.9, markersize=3, label='Predicted Path')
+        plt.scatter([traj_x[0]], [traj_y[0]], c='green', s=60, label='Start')
+        plt.scatter([traj_x[-1]], [traj_y[-1]], c='red', s=60, label='End')
+        plt.title(title)  
+        plt.xlabel('East (m)')
+        plt.ylabel('North (m)')
+        plt.xlim(-25, 25)
+        plt.ylim(-25, 25)
         plt.grid(True)
         plt.axis('equal')
         plt.legend()
         plt.show()
+        
+        # === ⬇️ 시작점-종료점 거리 계산 및 출력 추가 ===
+        start_x, start_y = traj_x[0], traj_y[0]
+        end_x, end_y = traj_x[-1], traj_y[-1]
+        dist = np.hypot(end_x - start_x, end_y - start_y)
+        print(f"Start-End distance: {dist:.3f} m")
 
         plt.plot(np.degrees(arr_heading), 'r-', label='Heading (deg)')
         plt.title('Cumulative Heading Change')
