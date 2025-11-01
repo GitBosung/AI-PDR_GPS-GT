@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pyproj import Proj
 import math
+from matplotlib.animation import FuncAnimation
 
 class TrajectoryPredictor:
     """
@@ -96,7 +97,7 @@ class TrajectoryPredictor:
         return np.array(wins, dtype=np.float32)
 
 
-    def predict_and_plot_trajectory(self, df: pd.DataFrame, plag_1Hz: bool = False, title: str = "" ):
+    def predict_and_plot_trajectory(self, df: pd.DataFrame, plag_1Hz: bool = False, title: str = "" , plot_flag: bool = False):
         """
         df에는 load_and_preprocess_csv 로 얻은 원본 50Hz DataFrame이 들어온다고 가정.
         1) plag_1Hz=False → stride=5, plag_1Hz=True → stride=50 로 윈도우 생성하여 예측 (스케일 복원 포함)
@@ -162,13 +163,25 @@ class TrajectoryPredictor:
             traj_x.append(x)
             traj_y.append(y)
             
+        if plot_flag:
+            plot_x = -np.array(traj_x)
+            plot_y = -np.array(traj_y)
+            x_label = 'Rotated East (m)'
+            y_label = 'Rotated North (m)'
+        else:
+            plot_x = np.array(traj_x)
+            plot_y = np.array(traj_y)
+            x_label = 'East (m)'
+            y_label = 'North (m)'
+            
+            
         # -------------------------------
         # Predicted Movement Trajectory plot
         # -------------------------------
         plt.figure(figsize=(8, 8))
-        plt.plot(traj_x, traj_y, 'b-', alpha=0.9, markersize=3, label='Predicted Path')
-        plt.scatter([traj_x[0]], [traj_y[0]], c='green', s=60, label='Start')
-        plt.scatter([traj_x[-1]], [traj_y[-1]], c='red', s=60, label='End')
+        plt.plot(plot_x, plot_y, 'b-', alpha=0.9, markersize=3, label='Predicted Path')
+        plt.scatter([plot_x[0]], [plot_y[0]], c='green', s=60, label='Start')
+        plt.scatter([plot_x[-1]], [plot_y[-1]], c='red', s=60, label='End')
         plt.title(title)  
         plt.xlabel('East (m)')
         plt.ylabel('North (m)')
@@ -198,7 +211,10 @@ class TrajectoryPredictor:
         ))
         plt.show()
 
-        return np.vstack([pred_speed, pred_hc]).T, (traj_x, traj_y)
+        #animate_trajectory(plot_x, plot_y, save_path='predicted_trajectory.mp4', interval_ms=100, title=title)
+
+        #return np.vstack([pred_speed, pred_hc]).T, (traj_x, traj_y)
+        return dist
 
     def compare_trajectories(self, df: pd.DataFrame, plag_1Hz: bool = False):
         """
@@ -306,3 +322,48 @@ class TrajectoryPredictor:
         plt.grid()
         plt.axis('equal')
         plt.show()
+
+
+def animate_trajectory(traj_x, traj_y, save_path='trajectory.mp4', interval_ms=100, title=""):
+    """
+    traj_x, traj_y: 궤적 데이터 (list or np.array)
+    save_path: 저장할 파일 경로 (예: 'output/trajectory.mp4')
+    interval_ms: 프레임 간 간격 (ms)
+    """
+    traj_x = np.array(traj_x)
+    traj_y = np.array(traj_y)
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.set_xlim(min(traj_x) - 1, max(traj_x) + 1)
+    ax.set_ylim(min(traj_y) - 1, max(traj_y) + 1)
+    ax.set_aspect('equal', adjustable='box')
+    ax.grid(True)
+    ax.set_title(title)
+    ax.set_xlabel('East (m)')
+    ax.set_ylabel('North (m)')
+
+    # Line (path) + Current position (dot)
+    line, = ax.plot([], [], 'b-', lw=2, label='Predicted Path')
+    point, = ax.plot([], [], 'ro', label='Current')
+    ax.scatter([traj_x[0]], [traj_y[0]], c='green', s=60, label='Start')
+    ax.legend()
+
+    # 초기화 함수
+    def init():
+        line.set_data([], [])
+        point.set_data([], [])
+        return line, point
+
+    # 프레임 업데이트 함수
+    def update(i):
+        line.set_data(traj_x[:i+1], traj_y[:i+1])
+        point.set_data(traj_x[i], traj_y[i])
+        return line, point
+
+    anim = FuncAnimation(fig, update, init_func=init, frames=len(traj_x), interval=interval_ms, blit=True)
+
+    # === mp4 저장 ===
+    anim.save(f"{title}.mp4", fps=1000/interval_ms, dpi=150, extra_args=['-vcodec', 'libx264'])
+    print(f"✅ Animation saved as: {save_path}")
+
+    plt.close(fig)
