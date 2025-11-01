@@ -103,6 +103,12 @@ class TrajectoryPredictor:
         1) plag_1Hz=False → stride=5, plag_1Hz=True → stride=50 로 윈도우 생성하여 예측 (스케일 복원 포함)
         2) 예측된 속도·헤딩을 plot
         3) 예측 궤적(accumulate) plot
+        
+        pram df: DataFrame
+        pram plag_1Hz: True → 1Hz 예측, False → 10Hz 예측, default=False
+        pram title: plot 제목, default=""
+        pram plot_flag: True → 궤적 플롯 시 좌표 반전 (우회전인 경우), default=False
+        return: 시작점-종료점 거리 (float)
         """
 
         stride = self.window_size if plag_1Hz else self.window_size // 10
@@ -118,9 +124,7 @@ class TrajectoryPredictor:
         pred_speed = self.y_speed_scaler.inverse_transform(Y_pred_scaled[:, 0].reshape(-1, 1)).ravel()
         pred_hc    = self.y_hc_scaler.inverse_transform(Y_pred_scaled[:, 1].reshape(-1, 1)).ravel()
         
-        # noise 제거를 위해 10도 이하의 헤딩 변화량을 0으로 보정
-        #pred_hc[np.abs(np.degrees(pred_hc)) < 10] = 0
-        
+        # 10Hz 예측인 경우, 윈도우 간격에 맞게 속도·헤딩 변화량 보정
         if not plag_1Hz:
             pred_speed = pred_speed * (stride/self.window_size)
             pred_hc    = pred_hc * (stride/self.window_size)
@@ -166,14 +170,9 @@ class TrajectoryPredictor:
         if plot_flag:
             plot_x = -np.array(traj_x)
             plot_y = -np.array(traj_y)
-            x_label = 'Rotated East (m)'
-            y_label = 'Rotated North (m)'
         else:
             plot_x = np.array(traj_x)
             plot_y = np.array(traj_y)
-            x_label = 'East (m)'
-            y_label = 'North (m)'
-            
             
         # -------------------------------
         # Predicted Movement Trajectory plot
@@ -192,7 +191,7 @@ class TrajectoryPredictor:
         plt.legend()
         plt.show()
         
-        # === ⬇️ 시작점-종료점 거리 계산 및 출력 추가 ===
+        # === 시작점-종료점 거리 계산 및 출력 추가 ===
         start_x, start_y = traj_x[0], traj_y[0]
         end_x, end_y = traj_x[-1], traj_y[-1]
         dist = np.hypot(end_x - start_x, end_y - start_y)
@@ -211,9 +210,9 @@ class TrajectoryPredictor:
         ))
         plt.show()
 
+        #주석을 해제하면 애니메이션 저장
         #animate_trajectory(plot_x, plot_y, save_path='predicted_trajectory.mp4', interval_ms=100, title=title)
 
-        #return np.vstack([pred_speed, pred_hc]).T, (traj_x, traj_y)
         return dist
 
     def compare_trajectories(self, df: pd.DataFrame, plag_1Hz: bool = False):
@@ -326,6 +325,7 @@ class TrajectoryPredictor:
 
 def animate_trajectory(traj_x, traj_y, save_path='trajectory.mp4', interval_ms=100, title=""):
     """
+    궤적 데이터를 애니메이션으로 저장하는 함수.
     traj_x, traj_y: 궤적 데이터 (list or np.array)
     save_path: 저장할 파일 경로 (예: 'output/trajectory.mp4')
     interval_ms: 프레임 간 간격 (ms)
