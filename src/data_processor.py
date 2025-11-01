@@ -355,7 +355,17 @@ class DataProcessor:
 
     @staticmethod
     def load_and_preprocess_csv_test(file_path, skiprows=50):
-        # ... 기존 테스트용 전처리 로직 그대로 유지 ...
+        """
+        테스트용 CSV 파일 로드 및 전처리 함수.
+        
+        기본 건너뛰기 시작 행 수 50 (1초)
+        기본 건너뛰기 종료 행 수 10 (0.2초)
+        
+        
+        param file_path: CSV 파일 경로
+        param skiprows: 건너뛸 행 수 (기본값: 50)
+        return: 전처리된 DataFrame
+        """
         df = pd.read_csv(file_path, skiprows=skiprows, skipfooter=10, engine="python")
 
         df.columns = [
