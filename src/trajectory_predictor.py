@@ -152,6 +152,8 @@ class TrajectoryPredictor:
         plt.grid(True)
         plt.legend()
         plt.show()
+        
+        
 
         # -------------------------------
         # Predicted 궤적 누적 적분
@@ -197,6 +199,9 @@ class TrajectoryPredictor:
         dist = np.hypot(end_x - start_x, end_y - start_y)
         print(f"Start-End distance: {dist:.3f} m")
 
+
+        print(f"Heading Error (deg): {np.abs(np.degrees(arr_heading[-1])) - 1080:.3f} deg")
+        heading_error = np.abs(np.degrees(arr_heading[-1])) - 1080
         plt.plot(np.degrees(arr_heading), 'r-', label='Heading (deg)')
         plt.title('Cumulative Heading Change')
         plt.xlabel('Time (s)')
@@ -209,11 +214,12 @@ class TrajectoryPredictor:
             90
         ))
         plt.show()
+        
 
         #주석을 해제하면 애니메이션 저장
         #animate_trajectory(plot_x, plot_y, save_path='predicted_trajectory.mp4', interval_ms=100, title=title)
 
-        return dist
+        return dist, heading_error
 
     def compare_trajectories(self, df: pd.DataFrame, plag_1Hz: bool = False):
         """
