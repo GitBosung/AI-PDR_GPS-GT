@@ -14,6 +14,7 @@ from tensorflow.keras.layers import (
     LSTM,
     Dense,
     LayerNormalization,
+    BatchNormalization,
     Add,
     MultiHeadAttention,
     Lambda,
@@ -22,7 +23,7 @@ from tensorflow.keras.layers import (
     GlobalAveragePooling1D,
     Embedding,
 )
-
+from tensorflow.keras import regularizers
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
@@ -52,14 +53,12 @@ class ModelTrainer:
         }
         self.use_concat = True
         
-        
-        
 
     def build_model(self):
         inputs = Input(shape=(self.window_size, self.num_features))
-
+    
         x = LSTM(128, return_sequences=True)(inputs)
-        x = LSTM(64, return_sequences=False)(x)
+        x = LSTM(128, return_sequences=False)(x)
         outputs = Dense(2)(x)
 
         self.model = tf.keras.Model(inputs, outputs)
@@ -73,19 +72,17 @@ class ModelTrainer:
     
     # def build_model(self):
     #     inputs = Input(shape=(self.window_size, self.num_features))  # (B,T,F)
-
-    #     # 기본 LSTM 스택 (기존과 동일)
+        
     #     x = LSTM(64, return_sequences=True)(inputs)
-    #     x = LSTM(32, return_sequences=True)(x)
-
-    #     attn = MultiHeadAttention(num_heads=2, key_dim=16)(x, x)
-    #     h = Concatenate(axis=-1)([x, attn])
-    #     h = GlobalAveragePooling1D()(h)
-    #     outputs = Dense(2)(h)
+    #     attn = MultiHeadAttention(num_heads=2, key_dim=32)(x, x, x)
+    #     x = Add()([x, attn])
+    #     x = LayerNormalization()(x)
+    #     x = LSTM(32, return_sequences=False)(x)
+    #     outputs = Dense(2)(x)
 
     #     self.model = tf.keras.Model(inputs, outputs)
     #     self.model.compile(
-    #         optimizer=Adam(learning_rate=1e-3), loss="mse", metrics=["mae", Huber()]
+    #         optimizer=Adam(learning_rate=1e-3), loss="mae", metrics=["mse", Huber()]
     #     )
     #     return self.model
     
@@ -176,9 +173,8 @@ class ModelTrainer:
         # self.y_speed_scaler = StandardScaler()
         # self.y_hc_scaler = StandardScaler()
         self.y_speed_scaler = MinMaxScaler()
+        self.y_hc_scaler    = MinMaxScaler(feature_range=(-1, 1))
         #feature_range=(-1, 1)
-        self.y_hc_scaler    = MinMaxScaler()
-
         y1 = self.y_speed_scaler.fit_transform(Y_tr[:, :1])
         y2 = self.y_hc_scaler.fit_transform(Y_tr[:, 1:2])
         Y_tr_s = np.hstack([y1, y2]).astype(np.float32)
@@ -189,24 +185,38 @@ class ModelTrainer:
 
         self.build_model()
 
+        # 🔹 체크포인트 저장 폴더
+        ckpt_dir = "checkpoints"
+        os.makedirs(ckpt_dir, exist_ok=True)
+
         callbacks = [
             EarlyStopping(
                 monitor="val_loss",
-                patience=10,
+                patience=5,
                 min_delta=5e-4,
-                restore_best_weights=True,
+                restore_best_weights=False,
             ),
-            # ReduceLROnPlateau(
+
+            # # 🔹 매 에포크마다 모델 저장 (파일명에 epoch, val_loss 포함)
+            # ModelCheckpoint(
+            #     filepath=os.path.join(
+            #         ckpt_dir,
+            #         "ep{epoch:03d}_val{val_loss:.4f}.h5"
+            #     ),
             #     monitor="val_loss",
-            #     factor=0.5,
-            #     patience=10,
-            #     min_lr=1e-6,
-            #     cooldown=1,
+            #     save_best_only=False,   
+            #     save_weights_only=False,
             #     verbose=1,
             # ),
-            ModelCheckpoint(
-                "best_model.h5", monitor="val_loss", save_best_only=True, verbose=0
-            ),
+
+            # # 🔹 가장 좋은 모델만 별도로 저장 (기존 방식 유지, 선택사항)
+            # ModelCheckpoint(
+            #     "best_model.h5",
+            #     monitor="val_loss",
+            #     save_best_only=True,
+            #     save_weights_only=False,
+            #     verbose=0,
+            # ),
         ]
 
         history = self.model.fit(
@@ -219,6 +229,67 @@ class ModelTrainer:
             verbose=1,
         )
         return history
+    
+    # def train_model(self, X, Y):
+    #     X_tr, X_te, Y_tr, Y_te = train_test_split(
+    #         X,
+    #         Y,
+    #         test_size=0.2,
+    #         random_state=42,
+    #         shuffle=True,
+    #     )
+
+    #     self.num_features = X_tr.shape[2]
+
+    #     X_tr_s = self.scale_sensor_data(X_tr, fit=True)
+    #     X_te_s = self.scale_sensor_data(X_te, fit=False)
+
+    #     # self.y_speed_scaler = StandardScaler()
+    #     # self.y_hc_scaler = StandardScaler()
+    #     self.y_speed_scaler = MinMaxScaler()
+    #     #feature_range=(-1, 1)
+    #     self.y_hc_scaler    = MinMaxScaler()
+
+    #     y1 = self.y_speed_scaler.fit_transform(Y_tr[:, :1])
+    #     y2 = self.y_hc_scaler.fit_transform(Y_tr[:, 1:2])
+    #     Y_tr_s = np.hstack([y1, y2]).astype(np.float32)
+
+    #     y1_te = self.y_speed_scaler.transform(Y_te[:, :1])
+    #     y2_te = self.y_hc_scaler.transform(Y_te[:, 1:2])
+    #     Y_te_s = np.hstack([y1_te, y2_te]).astype(np.float32)
+
+    #     self.build_model()
+
+    #     callbacks = [
+    #         EarlyStopping(
+    #             monitor="val_loss",
+    #             patience=10,
+    #             min_delta=5e-4,
+    #             restore_best_weights=True,
+    #         ),
+    #         # ReduceLROnPlateau(
+    #         #     monitor="val_loss",
+    #         #     factor=0.5,
+    #         #     patience=10,
+    #         #     min_lr=1e-6,
+    #         #     cooldown=1,
+    #         #     verbose=1,
+    #         # ),
+    #         ModelCheckpoint(
+    #             "best_model.h5", monitor="val_loss", save_best_only=True, verbose=0
+    #         ),
+    #     ]
+
+    #     history = self.model.fit(
+    #         X_tr_s,
+    #         Y_tr_s,
+    #         validation_data=(X_te_s, Y_te_s),
+    #         batch_size=self.batch_size,
+    #         epochs=self.epochs,
+    #         callbacks=callbacks,
+    #         verbose=1,
+    #     )
+    #     return history
     
     # def train_model(self, X_train, Y_train, X_val, Y_val):
     #     # 1) 기존과 동일하게 train/val 분리
@@ -350,5 +421,4 @@ class ModelTrainer:
         plt.legend()
         plt.grid(True)
         plt.show()
-
 

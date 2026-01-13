@@ -374,3 +374,5 @@ def animate_trajectory(traj_x, traj_y, save_path='trajectory.mp4', interval_ms=1
     print(f"✅ Animation saved as: {save_path}")
 
     plt.close(fig)
+
+

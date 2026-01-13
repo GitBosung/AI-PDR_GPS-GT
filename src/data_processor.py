@@ -63,12 +63,38 @@ class DataProcessor:
         start_dt = df["Time"].iloc[0]
         df["Elapsed Time"] = (df["Time"] - start_dt).dt.total_seconds()
 
-        df["Acc_Norm"] = np.linalg.norm(
-            df[["Accelerometer x", "Accelerometer y", "Accelerometer z"]].values, axis=1
-        )
-        df["Gyro_Norm"] = np.linalg.norm(
-            df[["Gyroscope x", "Gyroscope y", "Gyroscope z"]].values, axis=1
-        )
+        # df["Acc_Norm"] = np.linalg.norm(
+        #     df[["Accelerometer x", "Accelerometer y", "Accelerometer z"]].values, axis=1
+        # )
+        # df["Gyro_Norm"] = np.linalg.norm(
+        #     df[["Gyroscope x", "Gyroscope y", "Gyroscope z"]].values, axis=1
+        # )
+        # ---------------------------------------
+        # [실험용] Acc / Gyro 소수점 4자리 반올림
+        # ---------------------------------------
+        acc_cols = [
+            "Accelerometer x",
+            "Accelerometer y",
+            "Accelerometer z",
+        ]
+        gyro_cols = [
+            "Gyroscope x",
+            "Gyroscope y",
+            "Gyroscope z",
+        ]
+
+        df[acc_cols + gyro_cols] = df[acc_cols + gyro_cols].astype(float).round(4)
+
+        # ---------------------------------------
+        # 파생 피처 계산 (round된 원본 기반)
+        # ---------------------------------------
+        df["Acc_Norm"] = np.linalg.norm(df[acc_cols].values, axis=1)
+        df["Gyro_Norm"] = np.linalg.norm(df[gyro_cols].values, axis=1)
+
+        # ---------------------------------------
+        # 파생 피처도 소수점 4자리 반올림
+        # ---------------------------------------
+        df[["Acc_Norm", "Gyro_Norm"]] = df[["Acc_Norm", "Gyro_Norm"]].round(4)
 
         e, n, df = DataProcessor.llh_to_enu(df, flag, zone)
         v_10hz, dh_10Hz = DataProcessor.interpol_vAndh(e, n)
@@ -314,11 +340,37 @@ class DataProcessor:
         start_dt = df["Time"].iloc[0]
         df["Elapsed Time"] = (df["Time"] - start_dt).dt.total_seconds()
 
-        df["Acc_Norm"] = np.linalg.norm(
-            df[["Accelerometer x", "Accelerometer y", "Accelerometer z"]].values, axis=1
-        )
-        df["Gyro_Norm"] = np.linalg.norm(
-            df[["Gyroscope x", "Gyroscope y", "Gyroscope z"]].values, axis=1
-        )
+        # df["Acc_Norm"] = np.linalg.norm(
+        #     df[["Accelerometer x", "Accelerometer y", "Accelerometer z"]].values, axis=1
+        # )
+        # df["Gyro_Norm"] = np.linalg.norm(
+        #     df[["Gyroscope x", "Gyroscope y", "Gyroscope z"]].values, axis=1
+        # )
+        # ---------------------------------------
+        # [실험용] Acc / Gyro 소수점 4자리 반올림
+        # ---------------------------------------
+        acc_cols = [
+            "Accelerometer x",
+            "Accelerometer y",
+            "Accelerometer z",
+        ]
+        gyro_cols = [
+            "Gyroscope x",
+            "Gyroscope y",
+            "Gyroscope z",
+        ]
+
+        df[acc_cols + gyro_cols] = df[acc_cols + gyro_cols].astype(float).round(4)
+
+        # ---------------------------------------
+        # 파생 피처 계산 (round된 원본 기반)
+        # ---------------------------------------
+        df["Acc_Norm"] = np.linalg.norm(df[acc_cols].values, axis=1)
+        df["Gyro_Norm"] = np.linalg.norm(df[gyro_cols].values, axis=1)
+
+        # ---------------------------------------
+        # 파생 피처도 소수점 4자리 반올림
+        # ---------------------------------------
+        df[["Acc_Norm", "Gyro_Norm"]] = df[["Acc_Norm", "Gyro_Norm"]].round(4)
 
         return df
