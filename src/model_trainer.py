@@ -48,8 +48,8 @@ class ModelTrainer:
         self.feature_map = {
             "acc_axes": [0, 1, 2],
             "gyro_axes": [3, 4, 5],
-            "acc_norm": 6,
-            "gyro_norm": 7,
+            #"acc_norm": 6,
+            #"gyro_norm": 7,
         }
         self.use_concat = True
         
@@ -58,7 +58,7 @@ class ModelTrainer:
         inputs = Input(shape=(self.window_size, self.num_features))
     
         x = LSTM(128, return_sequences=True)(inputs)
-        x = LSTM(128, return_sequences=False)(x)
+        x = LSTM(64, return_sequences=False)(x)
         outputs = Dense(2)(x)
 
         self.model = tf.keras.Model(inputs, outputs)
@@ -66,18 +66,18 @@ class ModelTrainer:
         self.model.compile(
             optimizer=Adam(learning_rate=1e-3),
             loss="mae",
-            metrics=["mse", Huber(delta=1.0)],
+            #metrics=["mse", Huber(delta=1.0)],
         )
         return self.model
     
     # def build_model(self):
     #     inputs = Input(shape=(self.window_size, self.num_features))  # (B,T,F)
         
-    #     x = LSTM(64, return_sequences=True)(inputs)
+    #     x = LSTM(128, return_sequences=True)(inputs)
+    #     x = LSTM(64, return_sequences=True)(x)
     #     attn = MultiHeadAttention(num_heads=2, key_dim=32)(x, x, x)
     #     x = Add()([x, attn])
-    #     x = LayerNormalization()(x)
-    #     x = LSTM(32, return_sequences=False)(x)
+    #     x = GlobalAveragePooling1D()(x)
     #     outputs = Dense(2)(x)
 
     #     self.model = tf.keras.Model(inputs, outputs)
@@ -105,8 +105,8 @@ class ModelTrainer:
 
         acc_axes = self.feature_map.get("acc_axes", [])
         gyro_axes = self.feature_map.get("gyro_axes", [])
-        acc_norm_i = self.feature_map.get("acc_norm", None)
-        gyro_norm_i = self.feature_map.get("gyro_norm", None)
+        #acc_norm_i = self.feature_map.get("acc_norm", None)
+        #gyro_norm_i = self.feature_map.get("gyro_norm", None)
 
         # --- (A) 그룹 표준화 (acc, gyro 3축 각각 하나의 μ, σ) ---
         if acc_axes:
@@ -135,30 +135,30 @@ class ModelTrainer:
             p = self.sensor_scalers["gyro_group"]
             out[:, gyro_axes] = (out[:, gyro_axes] - p["mu"]) / p["sigma"]
 
-        # --- (B) Norm 채널도 개별 스케일링 ---
-        if acc_norm_i is not None:
-            if fit:
-                mu = float(X2d[:, acc_norm_i].mean())
-                sigma = float(X2d[:, acc_norm_i].std()) + eps
-                self.sensor_scalers["acc_norm"] = {
-                    "mu": mu,
-                    "sigma": sigma,
-                    "idx": acc_norm_i,
-                }
-            p = self.sensor_scalers["acc_norm"]
-            out[:, acc_norm_i] = (out[:, acc_norm_i] - p["mu"]) / p["sigma"]
+        # # --- (B) Norm 채널도 개별 스케일링 ---
+        # if acc_norm_i is not None:
+        #     if fit:
+        #         mu = float(X2d[:, acc_norm_i].mean())
+        #         sigma = float(X2d[:, acc_norm_i].std()) + eps
+        #         self.sensor_scalers["acc_norm"] = {
+        #             "mu": mu,
+        #             "sigma": sigma,
+        #             "idx": acc_norm_i,
+        #         }
+        #     p = self.sensor_scalers["acc_norm"]
+        #     out[:, acc_norm_i] = (out[:, acc_norm_i] - p["mu"]) / p["sigma"]
 
-        if gyro_norm_i is not None:
-            if fit:
-                mu = float(X2d[:, gyro_norm_i].mean())
-                sigma = float(X2d[:, gyro_norm_i].std()) + eps
-                self.sensor_scalers["gyro_norm"] = {
-                    "mu": mu,
-                    "sigma": sigma,
-                    "idx": gyro_norm_i,
-                }
-            p = self.sensor_scalers["gyro_norm"]
-            out[:, gyro_norm_i] = (out[:, gyro_norm_i] - p["mu"]) / p["sigma"]
+        # if gyro_norm_i is not None:
+        #     if fit:
+        #         mu = float(X2d[:, gyro_norm_i].mean())
+        #         sigma = float(X2d[:, gyro_norm_i].std()) + eps
+        #         self.sensor_scalers["gyro_norm"] = {
+        #             "mu": mu,
+        #             "sigma": sigma,
+        #             "idx": gyro_norm_i,
+        #         }
+        #     p = self.sensor_scalers["gyro_norm"]
+        #     out[:, gyro_norm_i] = (out[:, gyro_norm_i] - p["mu"]) / p["sigma"]
 
         return out.reshape(N, T, F).astype(np.float32)
 
@@ -170,10 +170,10 @@ class ModelTrainer:
         X_tr_s = self.scale_sensor_data(X_tr, fit=True)
         X_te_s = self.scale_sensor_data(X_te, fit=False)
 
-        # self.y_speed_scaler = StandardScaler()
-        # self.y_hc_scaler = StandardScaler()
-        self.y_speed_scaler = MinMaxScaler()
-        self.y_hc_scaler    = MinMaxScaler(feature_range=(-1, 1))
+        self.y_speed_scaler = StandardScaler()
+        self.y_hc_scaler = StandardScaler()
+        #self.y_speed_scaler = MinMaxScaler()
+        #self.y_hc_scaler    = MinMaxScaler()
         #feature_range=(-1, 1)
         y1 = self.y_speed_scaler.fit_transform(Y_tr[:, :1])
         y2 = self.y_hc_scaler.fit_transform(Y_tr[:, 1:2])
@@ -190,12 +190,12 @@ class ModelTrainer:
         os.makedirs(ckpt_dir, exist_ok=True)
 
         callbacks = [
-            EarlyStopping(
-                monitor="val_loss",
-                patience=5,
-                min_delta=5e-4,
-                restore_best_weights=False,
-            ),
+            # EarlyStopping(
+            #     monitor="val_loss",
+            #     patience=5,
+            #     min_delta=5e-4,
+            #     restore_best_weights=False,
+            # ),
 
             # # 🔹 매 에포크마다 모델 저장 (파일명에 epoch, val_loss 포함)
             # ModelCheckpoint(
@@ -226,6 +226,7 @@ class ModelTrainer:
             batch_size=self.batch_size,
             epochs=self.epochs,
             callbacks=callbacks,
+            shuffle=True,
             verbose=1,
         )
         return history

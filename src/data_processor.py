@@ -6,6 +6,7 @@ from scipy.interpolate import PchipInterpolator
 import math
 import matplotlib.pyplot as plt
 from numpy.lib.stride_tricks import sliding_window_view
+from scipy.signal import butter, filtfilt
 
 
 logger = logging.getLogger(__name__)
@@ -20,8 +21,33 @@ _proj_utm52 = Proj("epsg:32652")
 class DataProcessor:
     def __init__(self, window_size=200):
         self.window_size = window_size
-
+        
     @staticmethod
+    def _lowpass_filter(df, cols, fs=50.0, cutoff=5.0, order=4):
+        """
+        Butterworth 저역통과필터 적용
+
+        fs: 샘플링 주파수 (Hz)
+        cutoff: 컷오프 주파수 (Hz)
+        order: 필터 차수
+        """
+        nyq = 0.5 * fs
+        normal_cutoff = cutoff / nyq
+
+        b, a = butter(order, normal_cutoff, btype="low", analog=False)
+
+        for c in cols:
+            x = df[c].astype(float).to_numpy()
+
+            # 너무 짧으면 필터 생략
+            if len(x) < order * 3:
+                continue
+
+            df[c] = filtfilt(b, a, x)
+
+        return df
+
+
     def load_and_preprocess_csv(
         file_path, skiprows=100, skipfooter=100, flag=False, zone=52, window_size=200
     ):
@@ -66,35 +92,28 @@ class DataProcessor:
         # df["Acc_Norm"] = np.linalg.norm(
         #     df[["Accelerometer x", "Accelerometer y", "Accelerometer z"]].values, axis=1
         # )
-        # df["Gyro_Norm"] = np.linalg.norm(
-        #     df[["Gyroscope x", "Gyroscope y", "Gyroscope z"]].values, axis=1
+
+        acc_cols = ["Accelerometer x", "Accelerometer y", "Accelerometer z"]
+        gyro_cols = ["Gyroscope x", "Gyroscope y", "Gyroscope z"]
+        
+        df = DataProcessor._lowpass_filter(
+            df,
+            cols=gyro_cols,
+            fs=50.0,     
+            cutoff=3.0,  
+            order=2
+        )
+        
+        # df = DataProcessor._lowpass_filter(
+        #     df,
+        #     cols=acc_cols,
+        #     fs=50.0,     
+        #     cutoff=3.0,  
+        #     order=2
         # )
-        # ---------------------------------------
-        # [실험용] Acc / Gyro 소수점 4자리 반올림
-        # ---------------------------------------
-        acc_cols = [
-            "Accelerometer x",
-            "Accelerometer y",
-            "Accelerometer z",
-        ]
-        gyro_cols = [
-            "Gyroscope x",
-            "Gyroscope y",
-            "Gyroscope z",
-        ]
 
-        df[acc_cols + gyro_cols] = df[acc_cols + gyro_cols].astype(float).round(4)
-
-        # ---------------------------------------
-        # 파생 피처 계산 (round된 원본 기반)
-        # ---------------------------------------
         df["Acc_Norm"] = np.linalg.norm(df[acc_cols].values, axis=1)
         df["Gyro_Norm"] = np.linalg.norm(df[gyro_cols].values, axis=1)
-
-        # ---------------------------------------
-        # 파생 피처도 소수점 4자리 반올림
-        # ---------------------------------------
-        df[["Acc_Norm", "Gyro_Norm"]] = df[["Acc_Norm", "Gyro_Norm"]].round(4)
 
         e, n, df = DataProcessor.llh_to_enu(df, flag, zone)
         v_10hz, dh_10Hz = DataProcessor.interpol_vAndh(e, n)
@@ -263,8 +282,8 @@ class DataProcessor:
             "Gyroscope x",
             "Gyroscope y",
             "Gyroscope z",
-            "Acc_Norm",
-            "Gyro_Norm",
+            #"Acc_Norm",
+            #"Gyro_Norm",
         ]
 
         values = df[sensor_cols].to_numpy()   # (N, num_features)
@@ -340,37 +359,31 @@ class DataProcessor:
         start_dt = df["Time"].iloc[0]
         df["Elapsed Time"] = (df["Time"] - start_dt).dt.total_seconds()
 
-        # df["Acc_Norm"] = np.linalg.norm(
-        #     df[["Accelerometer x", "Accelerometer y", "Accelerometer z"]].values, axis=1
+        acc_cols = ["Accelerometer x", "Accelerometer y", "Accelerometer z"]
+        gyro_cols = ["Gyroscope x", "Gyroscope y", "Gyroscope z"]
+        
+        df = DataProcessor._lowpass_filter(
+            df,
+            cols=gyro_cols,
+            fs=50.0,
+            cutoff=3.0,
+            order=2,
+        )
+        
+        # df = DataProcessor._lowpass_filter(
+        #                 df,
+        #     cols=acc_cols,
+        #     fs=50.0,
+        #     cutoff=1.0,
+        #     order=2,
         # )
-        # df["Gyro_Norm"] = np.linalg.norm(
-        #     df[["Gyroscope x", "Gyroscope y", "Gyroscope z"]].values, axis=1
-        # )
-        # ---------------------------------------
-        # [실험용] Acc / Gyro 소수점 4자리 반올림
-        # ---------------------------------------
-        acc_cols = [
-            "Accelerometer x",
-            "Accelerometer y",
-            "Accelerometer z",
-        ]
-        gyro_cols = [
-            "Gyroscope x",
-            "Gyroscope y",
-            "Gyroscope z",
-        ]
 
-        df[acc_cols + gyro_cols] = df[acc_cols + gyro_cols].astype(float).round(4)
 
-        # ---------------------------------------
-        # 파생 피처 계산 (round된 원본 기반)
-        # ---------------------------------------
-        df["Acc_Norm"] = np.linalg.norm(df[acc_cols].values, axis=1)
-        df["Gyro_Norm"] = np.linalg.norm(df[gyro_cols].values, axis=1)
-
-        # ---------------------------------------
-        # 파생 피처도 소수점 4자리 반올림
-        # ---------------------------------------
-        df[["Acc_Norm", "Gyro_Norm"]] = df[["Acc_Norm", "Gyro_Norm"]].round(4)
+        df["Acc_Norm"] = np.linalg.norm(
+            df[["Accelerometer x", "Accelerometer y", "Accelerometer z"]].values, axis=1
+        )
+        df["Gyro_Norm"] = np.linalg.norm(
+            df[["Gyroscope x", "Gyroscope y", "Gyroscope z"]].values, axis=1
+        )
 
         return df
