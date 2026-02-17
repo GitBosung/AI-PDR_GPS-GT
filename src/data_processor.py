@@ -282,8 +282,8 @@ class DataProcessor:
             "Gyroscope x",
             "Gyroscope y",
             "Gyroscope z",
-            #"Acc_Norm",
-            #"Gyro_Norm",
+            "Acc_Norm",
+            "Gyro_Norm",
         ]
 
         values = df[sensor_cols].to_numpy()   # (N, num_features)

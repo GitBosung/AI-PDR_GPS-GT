@@ -60,11 +60,11 @@ class TrajectoryPredictor:
     
     
     def _prepare_windows(self, df: pd.DataFrame, stride: int = 5) -> np.ndarray:
-        # cols = ['Accelerometer x','Accelerometer y','Accelerometer z',
-        #         'Gyroscope x','Gyroscope y','Gyroscope z',
-        #         'Acc_Norm', 'Gyro_Norm']
         cols = ['Accelerometer x','Accelerometer y','Accelerometer z',
-        'Gyroscope x','Gyroscope y','Gyroscope z']
+                'Gyroscope x','Gyroscope y','Gyroscope z',
+                'Acc_Norm', 'Gyro_Norm']
+        # cols = ['Accelerometer x','Accelerometer y','Accelerometer z',
+        # 'Gyroscope x','Gyroscope y','Gyroscope z']
         arr = df[cols].values.astype(np.float32)
 
         M = len(df)
@@ -73,14 +73,14 @@ class TrajectoryPredictor:
 
         acc_axes  = [0,1,2]
         gyro_axes = [3,4,5]
-        # acc_norm_idx, gyro_norm_idx = 6, 7
+        acc_norm_idx, gyro_norm_idx = 6, 7
         #acc_norm_idx= 6
         
 
         sc_acc   = self.sensor_scalers.get("acc_group", None)
         sc_gyro  = self.sensor_scalers.get("gyro_group", None)
-        #sc_anorm = self.sensor_scalers.get("acc_norm", None)   # ← Trainer에서 저장된 항목 사용
-        #sc_gnorm = self.sensor_scalers.get("gyro_norm", None)
+        sc_anorm = self.sensor_scalers.get("acc_norm", None)   # ← Trainer에서 저장된 항목 사용
+        sc_gnorm = self.sensor_scalers.get("gyro_norm", None)
 
         for start in range(0, M - W + 1, stride):
             win = arr[start:start+W].copy()  # (W, 8)
@@ -90,10 +90,10 @@ class TrajectoryPredictor:
             win = self._apply_group_scale(win, sc_gyro, gyro_axes)
 
             # --- (2) Norm은 '재계산'하지 않고, 기존 값에 스케일만 적용 ---
-            # if acc_norm_idx is not None:
-            #     win[:, acc_norm_idx] = self._apply_scalar_scale(win[:, acc_norm_idx], sc_anorm)
-            # if gyro_norm_idx is not None:
-            #     win[:, gyro_norm_idx] = self._apply_scalar_scale(win[:, gyro_norm_idx], sc_gnorm)
+            if acc_norm_idx is not None:
+                win[:, acc_norm_idx] = self._apply_scalar_scale(win[:, acc_norm_idx], sc_anorm)
+            if gyro_norm_idx is not None:
+                win[:, gyro_norm_idx] = self._apply_scalar_scale(win[:, gyro_norm_idx], sc_gnorm)
 
             wins.append(win)
 
