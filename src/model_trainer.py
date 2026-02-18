@@ -60,43 +60,43 @@ class ModelTrainer:
         }
         self.use_concat = True
         
-    def build_model(self):
-        inputs = Input(shape=(self.window_size, self.num_features))  # (B,T,F)
-
-        x = LSTM(128, return_sequences=True)(inputs)
-        x = LSTM(64, return_sequences=True)(x)
-
-        attn = MultiHeadAttention(num_heads=2, key_dim=32, dropout=0.1)(x, x)
-        x = Add()([x, attn])
-        x = BatchNormalization()(x)
-        x = Dropout(0.1)(x)
-
-        x = attention_pooling(x)
-
-        outputs = Dense(2)(x)
-
-        self.model = tf.keras.Model(inputs, outputs)
-        self.model.compile(
-            optimizer=Adam(learning_rate=1e-3),
-            loss="mae"
-        )
-        return self.model
-
     # def build_model(self):
-    #     inputs = Input(shape=(self.window_size, self.num_features))
-    
+    #     inputs = Input(shape=(self.window_size, self.num_features))  # (B,T,F)
+
     #     x = LSTM(128, return_sequences=True)(inputs)
-    #     x = LSTM(64, return_sequences=False)(x)
+    #     x = LSTM(64, return_sequences=True)(x)
+
+    #     attn = MultiHeadAttention(num_heads=2, key_dim=32)(x, x)
+    #     x = Add()([x, attn])
+    #     # x = LayerNormalization()(x)
+    #     # x = Dropout(0.1)(x)
+
+    #     x = attention_pooling(x)
+
     #     outputs = Dense(2)(x)
 
     #     self.model = tf.keras.Model(inputs, outputs)
-
     #     self.model.compile(
     #         optimizer=Adam(learning_rate=1e-3),
-    #         loss="mae",
-    #         #metrics=["mse", Huber(delta=1.0)],
+    #         loss="mae"
     #     )
     #     return self.model
+
+    def build_model(self):
+        inputs = Input(shape=(self.window_size, self.num_features))
+    
+        x = LSTM(128, return_sequences=True)(inputs)
+        x = LSTM(64, return_sequences=False)(x)
+        outputs = Dense(2)(x)
+
+        self.model = tf.keras.Model(inputs, outputs)
+
+        self.model.compile(
+            optimizer=Adam(learning_rate=1e-3),
+            loss="mae",
+            #metrics=["mse", Huber(delta=1.0)],
+        )
+        return self.model
     
     
     
@@ -195,7 +195,7 @@ class ModelTrainer:
         # self.y_speed_scaler = StandardScaler()
         # self.y_hc_scaler = StandardScaler()
         self.y_speed_scaler = MinMaxScaler()
-        self.y_hc_scaler    = MinMaxScaler()
+        self.y_hc_scaler    = MinMaxScaler(feature_range=(-1, 1))
         #feature_range=(-1, 1)
         y1 = self.y_speed_scaler.fit_transform(Y_tr[:, :1])
         y2 = self.y_hc_scaler.fit_transform(Y_tr[:, 1:2])

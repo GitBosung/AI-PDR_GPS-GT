@@ -96,13 +96,13 @@ class DataProcessor:
         acc_cols = ["Accelerometer x", "Accelerometer y", "Accelerometer z"]
         gyro_cols = ["Gyroscope x", "Gyroscope y", "Gyroscope z"]
         
-        df = DataProcessor._lowpass_filter(
-            df,
-            cols=gyro_cols,
-            fs=50.0,     
-            cutoff=3.0,  
-            order=2
-        )
+        # df = DataProcessor._lowpass_filter(
+        #     df,
+        #     cols=gyro_cols,
+        #     fs=50.0,     
+        #     cutoff=3.0,  
+        #     order=2
+        # )
         
         # df = DataProcessor._lowpass_filter(
         #     df,
@@ -362,13 +362,13 @@ class DataProcessor:
         acc_cols = ["Accelerometer x", "Accelerometer y", "Accelerometer z"]
         gyro_cols = ["Gyroscope x", "Gyroscope y", "Gyroscope z"]
         
-        df = DataProcessor._lowpass_filter(
-            df,
-            cols=gyro_cols,
-            fs=50.0,
-            cutoff=3.0,
-            order=2,
-        )
+        # df = DataProcessor._lowpass_filter(
+        #     df,
+        #     cols=gyro_cols,
+        #     fs=50.0,
+        #     cutoff=3.0,
+        #     order=2,
+        # )
         
         # df = DataProcessor._lowpass_filter(
         #                 df,
