@@ -48,17 +48,9 @@ class ModelTrainer:
         self.num_features = num_features
         self.epochs = epochs
         self.batch_size = batch_size
-        self.sensor_scalers = {}
-        self.y_speed_scaler = None
-        self.y_hc_scaler = None
+        self.x_scaler = None
+        self.y_scaler = None
         self.model = None
-        self.feature_map = {
-            "acc_axes": [0, 1, 2],
-            "gyro_axes": [3, 4, 5],
-            "acc_norm": 6,
-            "gyro_norm": 7,
-        }
-        self.use_concat = True
         
     # def build_model(self):
     #     inputs = Input(shape=(self.window_size, self.num_features))  # (B,T,F)
@@ -99,82 +91,6 @@ class ModelTrainer:
         return self.model
     
     
-    
-    def scale_sensor_data(self, X: np.ndarray, fit: bool = True) -> np.ndarray:
-        """
-        - acc 3축, gyro 3축을 각각 '그룹'으로 묶어 하나의 μ,σ(스칼라)로 표준화
-        - acc_norm, gyro_norm도 기존 값 그대로 개별 스케일링
-        """
-        if X.ndim != 3:
-            raise ValueError("X must be 3D: (N, T, F)")
-        N, T, F = X.shape
-        eps = 1e-8
-
-        X2d = X.reshape(-1, F).astype(np.float32)
-        out = X2d.copy()
-
-        if fit:
-            self.sensor_scalers = {}
-
-        acc_axes = self.feature_map.get("acc_axes", [])
-        gyro_axes = self.feature_map.get("gyro_axes", [])
-        acc_norm_i = self.feature_map.get("acc_norm", None)
-        gyro_norm_i = self.feature_map.get("gyro_norm", None)
-
-        # --- (A) 그룹 표준화 (acc, gyro 3축 각각 하나의 μ, σ) ---
-        if acc_axes:
-            if fit:
-                block = X2d[:, acc_axes]
-                mu = float(block.mean())
-                sigma = float(block.std()) + eps
-                self.sensor_scalers["acc_group"] = {
-                    "mu": mu,
-                    "sigma": sigma,
-                    "idxs": acc_axes,
-                }
-            p = self.sensor_scalers["acc_group"]
-            out[:, acc_axes] = (out[:, acc_axes] - p["mu"]) / p["sigma"]
-
-        if gyro_axes:
-            if fit:
-                block = X2d[:, gyro_axes]
-                mu = float(block.mean())
-                sigma = float(block.std()) + eps
-                self.sensor_scalers["gyro_group"] = {
-                    "mu": mu,
-                    "sigma": sigma,
-                    "idxs": gyro_axes,
-                }
-            p = self.sensor_scalers["gyro_group"]
-            out[:, gyro_axes] = (out[:, gyro_axes] - p["mu"]) / p["sigma"]
-
-        # --- (B) Norm 채널도 개별 스케일링 ---
-        if acc_norm_i is not None:
-            if fit:
-                mu = float(X2d[:, acc_norm_i].mean())
-                sigma = float(X2d[:, acc_norm_i].std()) + eps
-                self.sensor_scalers["acc_norm"] = {
-                    "mu": mu,
-                    "sigma": sigma,
-                    "idx": acc_norm_i,
-                }
-            p = self.sensor_scalers["acc_norm"]
-            out[:, acc_norm_i] = (out[:, acc_norm_i] - p["mu"]) / p["sigma"]
-
-        if gyro_norm_i is not None:
-            if fit:
-                mu = float(X2d[:, gyro_norm_i].mean())
-                sigma = float(X2d[:, gyro_norm_i].std()) + eps
-                self.sensor_scalers["gyro_norm"] = {
-                    "mu": mu,
-                    "sigma": sigma,
-                    "idx": gyro_norm_i,
-                }
-            p = self.sensor_scalers["gyro_norm"]
-            out[:, gyro_norm_i] = (out[:, gyro_norm_i] - p["mu"]) / p["sigma"]
-
-        return out.reshape(N, T, F).astype(np.float32)
-
     def train_model(self, X, Y, test_size=0.2, random_state=42):
 
         # -----------------------------
@@ -188,22 +104,21 @@ class ModelTrainer:
         )
         
         self.num_features = X_tr.shape[2]
-
-        X_tr_s = self.scale_sensor_data(X_tr, fit=True)
-        X_te_s = self.scale_sensor_data(X_te, fit=False)
-
-        # self.y_speed_scaler = StandardScaler()
-        # self.y_hc_scaler = StandardScaler()
-        self.y_speed_scaler = MinMaxScaler()
-        self.y_hc_scaler    = MinMaxScaler(feature_range=(-1, 1))
-        #feature_range=(-1, 1)
-        y1 = self.y_speed_scaler.fit_transform(Y_tr[:, :1])
-        y2 = self.y_hc_scaler.fit_transform(Y_tr[:, 1:2])
-        Y_tr_s = np.hstack([y1, y2]).astype(np.float32)
-
-        y1_te = self.y_speed_scaler.transform(Y_te[:, :1])
-        y2_te = self.y_hc_scaler.transform(Y_te[:, 1:2])
-        Y_te_s = np.hstack([y1_te, y2_te]).astype(np.float32)
+        
+        self.x_scaler = StandardScaler()
+        self.y_scaler = StandardScaler()
+        
+        X_tr_2d = X_tr.reshape(-1, self.num_features)
+        x_te_2d = X_te.reshape(-1, self.num_features)
+        
+        X_tr_2d_s = self.x_scaler.fit_transform(X_tr_2d)
+        x_te_2d_s = self.x_scaler.transform(x_te_2d)
+        
+        X_tr_s = X_tr_2d_s.reshape(X_tr.shape)
+        X_te_s = x_te_2d_s.reshape(X_te.shape)
+        
+        Y_tr_s = self.y_scaler.fit_transform(Y_tr)
+        Y_te_s = self.y_scaler.transform(Y_te)
 
         self.build_model()
 
@@ -238,9 +153,8 @@ class ModelTrainer:
         self.model.save(mpath)
         joblib.dump(
             {
-                "sensor": self.sensor_scalers,
-                "y_speed": self.y_speed_scaler,
-                "y_hc": self.y_hc_scaler,
+                "x_scaler": self.x_scaler,
+                "y_scaler": self.y_scaler,
             },
             spath,
         )
@@ -248,16 +162,19 @@ class ModelTrainer:
 
     def load_model(self, model_path):
         self.model = load_model(model_path, compile=False)
+
         spath = model_path.replace(".h5", ".joblib")
+
         if os.path.exists(spath):
             data = joblib.load(spath)
-            self.sensor_scalers = data["sensor"]
-            self.y_speed_scaler = data["y_speed"]
-            self.y_hc_scaler = data["y_hc"]
-        # 필요한 경우 여기서 다시 compile (옵션)
+            self.x_scaler = data["x_scaler"]
+            self.y_scaler = data["y_scaler"]
+
         self.model.compile(
-            optimizer=Adam(1e-3, clipnorm=1.0), loss=Huber(delta=1.0), metrics=["mae"]
+            optimizer=Adam(1e-3),
+            loss="mae",
         )
+
         return self.model
 
     def plot_training_history(self, history):

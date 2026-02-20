@@ -11,89 +11,33 @@ class TrajectoryPredictor:
       DataProcessor로 준비된 df에서 윈도우 생성 → 통계 피처 계산 → 스케일 → 예측 → 복원 → 시각화
     """
 
-    def __init__(self, model, sensor_scalers, y_speed_scaler, y_hc_scaler, window_size):
+    def __init__(self, model, x_scaler, y_scaler, window_size):
         self.model = model
-        self.sensor_scalers = sensor_scalers
-        self.y_speed_scaler = y_speed_scaler
-        self.y_hc_scaler = y_hc_scaler
+        self.x_scaler = x_scaler
+        self.y_scaler = y_scaler
         self.window_size = window_size
-
-    @staticmethod
-    def _apply_group_scale(win_2d: np.ndarray, scaler_entry, axes, eps=1e-8):
-        """
-        win_2d: (W, F) 윈도우
-        scaler_entry:
-        - (A) StandardScaler 객체  → .transform 사용
-        - (B) dict {"mu":..., "sigma":..., "idxs":[...]} → 수식 적용
-        axes: 그룹 축 인덱스 (예: [0,1,2])
-        """
-        if scaler_entry is None:
-            return win_2d
-        if hasattr(scaler_entry, "transform"):
-            # (A) StandardScaler 같은 sklearn 객체
-            win_2d[:, axes] = scaler_entry.transform(win_2d[:, axes])
-        else:
-            # (B) dict 저장된 그룹 파라미터
-            mu = scaler_entry.get("mu", 0.0)
-            sigma = scaler_entry.get("sigma", 1.0) + eps
-            win_2d[:, axes] = (win_2d[:, axes] - mu) / sigma
-        return win_2d
-    @staticmethod
-    def _apply_scalar_scale(vec_1d: np.ndarray, scaler_entry, eps=1e-8):
-        """
-        vec_1d: (W,) 혹은 (W,1)
-        scaler_entry:
-        - (A) StandardScaler 등 sklearn 객체 → .transform 사용
-        - (B) dict {"mu":..., "sigma":...} → 수식 적용
-        """
-        if scaler_entry is None:
-            return vec_1d
-        if hasattr(scaler_entry, "transform"):
-            # vec_1d shape 보정
-            v = vec_1d.reshape(-1, 1)
-            v = scaler_entry.transform(v)
-            return v.ravel()
-        else:
-            mu = float(scaler_entry.get("mu", 0.0))
-            sigma = float(scaler_entry.get("sigma", 1.0)) + eps
-            return (vec_1d - mu) / sigma
-    
     
     def _prepare_windows(self, df: pd.DataFrame, stride: int = 5) -> np.ndarray:
-        cols = ['Accelerometer x','Accelerometer y','Accelerometer z',
-                'Gyroscope x','Gyroscope y','Gyroscope z',
-                'Acc_Norm', 'Gyro_Norm']
-        # cols = ['Accelerometer x','Accelerometer y','Accelerometer z',
-        # 'Gyroscope x','Gyroscope y','Gyroscope z']
+        cols = [
+            'Accelerometer x','Accelerometer y','Accelerometer z',
+            'Gyroscope x','Gyroscope y','Gyroscope z',
+            'Acc_Norm','Gyro_Norm'
+        ]
+
         arr = df[cols].values.astype(np.float32)
 
-        M = len(df)
+        M = len(arr)
         W = self.window_size
         wins = []
 
-        acc_axes  = [0,1,2]
-        gyro_axes = [3,4,5]
-        acc_norm_idx, gyro_norm_idx = 6, 7
-        #acc_norm_idx= 6
-        
-
-        sc_acc   = self.sensor_scalers.get("acc_group", None)
-        sc_gyro  = self.sensor_scalers.get("gyro_group", None)
-        sc_anorm = self.sensor_scalers.get("acc_norm", None)   # ← Trainer에서 저장된 항목 사용
-        sc_gnorm = self.sensor_scalers.get("gyro_norm", None)
-
         for start in range(0, M - W + 1, stride):
-            win = arr[start:start+W].copy()  # (W, 8)
+            win = arr[start:start+W].copy()   # (W, F)
 
-            # --- (1) acc/gyro 3축 그룹 스케일 ---
-            win = self._apply_group_scale(win, sc_acc,  acc_axes)
-            win = self._apply_group_scale(win, sc_gyro, gyro_axes)
-
-            # --- (2) Norm은 '재계산'하지 않고, 기존 값에 스케일만 적용 ---
-            if acc_norm_idx is not None:
-                win[:, acc_norm_idx] = self._apply_scalar_scale(win[:, acc_norm_idx], sc_anorm)
-            if gyro_norm_idx is not None:
-                win[:, gyro_norm_idx] = self._apply_scalar_scale(win[:, gyro_norm_idx], sc_gnorm)
+            # ---- scaler 적용 (train과 동일 방식) ----
+            F = win.shape[1]
+            win_2d = win.reshape(-1, F)
+            win_2d = self.x_scaler.transform(win_2d)
+            win = win_2d.reshape(W, F)
 
             wins.append(win)
 
@@ -122,10 +66,9 @@ class TrajectoryPredictor:
         # 1) 모델 예측 (스케일된 Y_pred_scaled)
         Y_pred_scaled = self.model.predict(X)  # shape = (num_windows, 2)
 
-        # 2) 스케일 복원
-        #    - 첫 번째 열은 속도, 두 번째 열은 헤딩 변화량
-        pred_speed = self.y_speed_scaler.inverse_transform(Y_pred_scaled[:, 0].reshape(-1, 1)).ravel()
-        pred_hc    = self.y_hc_scaler.inverse_transform(Y_pred_scaled[:, 1].reshape(-1, 1)).ravel()
+        Y_pred = self.y_scaler.inverse_transform(Y_pred_scaled)   # (N, 2)
+        pred_speed = Y_pred[:, 0]
+        pred_hc    = Y_pred[:, 1]
         
         # 10Hz 예측인 경우, 윈도우 간격에 맞게 속도·헤딩 변화량 보정
         if not plag_1Hz:
@@ -332,50 +275,5 @@ class TrajectoryPredictor:
         plt.axis('equal')
         plt.show()
 
-
-def animate_trajectory(traj_x, traj_y, save_path='trajectory.mp4', interval_ms=100, title=""):
-    """
-    궤적 데이터를 애니메이션으로 저장하는 함수.
-    traj_x, traj_y: 궤적 데이터 (list or np.array)
-    save_path: 저장할 파일 경로 (예: 'output/trajectory.mp4')
-    interval_ms: 프레임 간 간격 (ms)
-    """
-    traj_x = np.array(traj_x)
-    traj_y = np.array(traj_y)
-
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.set_xlim(min(traj_x) - 1, max(traj_x) + 1)
-    ax.set_ylim(min(traj_y) - 1, max(traj_y) + 1)
-    ax.set_aspect('equal', adjustable='box')
-    ax.grid(True)
-    ax.set_title(title)
-    ax.set_xlabel('East (m)')
-    ax.set_ylabel('North (m)')
-
-    # Line (path) + Current position (dot)
-    line, = ax.plot([], [], 'b-', lw=2, label='Predicted Path')
-    point, = ax.plot([], [], 'ro', label='Current')
-    ax.scatter([traj_x[0]], [traj_y[0]], c='green', s=60, label='Start')
-    ax.legend()
-
-    # 초기화 함수
-    def init():
-        line.set_data([], [])
-        point.set_data([], [])
-        return line, point
-
-    # 프레임 업데이트 함수
-    def update(i):
-        line.set_data(traj_x[:i+1], traj_y[:i+1])
-        point.set_data(traj_x[i], traj_y[i])
-        return line, point
-
-    anim = FuncAnimation(fig, update, init_func=init, frames=len(traj_x), interval=interval_ms, blit=True)
-
-    # === mp4 저장 ===
-    anim.save(f"{title}.mp4", fps=1000/interval_ms, dpi=150, extra_args=['-vcodec', 'libx264'])
-    print(f"✅ Animation saved as: {save_path}")
-
-    plt.close(fig)
 
 
