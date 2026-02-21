@@ -9,32 +9,31 @@ from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCh
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import Huber
 from tensorflow.keras.layers import (
-    Input, LSTM, Dense, Add, MultiHeadAttention,
-    Dropout, LayerNormalization, Softmax, Multiply, Lambda,
-    BatchNormalization
+    Input, Conv1D, Add, Activation, Dropout, LSTM, 
+    LayerNormalization, GlobalAveragePooling1D, Dense
 )
 from tensorflow.keras import regularizers
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 
-def attention_pooling(x):
-    """
-    x: (B, T, D)
-    returns: (B, D)  (time-weighted sum)
-    """
-    # (B, T, 1) : 각 timestep 중요도 점수
-    scores = Dense(1, name="attn_pool_score")(x)
+# def attention_pooling(x):
+#     """
+#     x: (B, T, D)
+#     returns: (B, D)  (time-weighted sum)
+#     """
+#     # (B, T, 1) : 각 timestep 중요도 점수
+#     scores = Dense(1, name="attn_pool_score")(x)
 
-    # (B, T, 1) : time 축으로 softmax -> 가중치
-    weights = Softmax(axis=1, name="attn_pool_weights")(scores)
+#     # (B, T, 1) : time 축으로 softmax -> 가중치
+#     weights = Softmax(axis=1, name="attn_pool_weights")(scores)
 
-    # (B, T, D) : 가중치 적용
-    weighted = Multiply(name="attn_pool_apply")([x, weights])
+#     # (B, T, D) : 가중치 적용
+#     weighted = Multiply(name="attn_pool_apply")([x, weights])
 
-    # (B, D) : time 축으로 가중합
-    pooled = Lambda(lambda t: tf.reduce_sum(t, axis=1), name="attn_pool_sum")(weighted)
-    return pooled
+#     # (B, D) : time 축으로 가중합
+#     pooled = Lambda(lambda t: tf.reduce_sum(t, axis=1), name="attn_pool_sum")(weighted)
+#     return pooled
 
 class ModelTrainer:
     """
@@ -73,23 +72,26 @@ class ModelTrainer:
     #         loss="mae"
     #     )
     #     return self.model
-
+    
+    
     def build_model(self):
         inputs = Input(shape=(self.window_size, self.num_features))
     
-        x = LSTM(128, return_sequences=True)(inputs)
-        x = LSTM(64, return_sequences=False)(x)
+        x = LSTM(256, return_sequences=True)(inputs)
+        x = LSTM(128, return_sequences=False)(x)
+        
         outputs = Dense(2)(x)
 
         self.model = tf.keras.Model(inputs, outputs)
 
         self.model.compile(
-            optimizer=Adam(learning_rate=1e-3),
-            loss="mae",
+            optimizer=Adam(learning_rate=1e-4),
+            loss="mse",
             #metrics=["mse", Huber(delta=1.0)],
         )
         return self.model
     
+
     
     def train_model(self, X, Y, test_size=0.2, random_state=42):
 
@@ -102,6 +104,31 @@ class ModelTrainer:
             random_state=random_state,
             shuffle=True
         )
+        
+        def plot_y_distribution(Y, title="Y Distribution"):
+            speed = Y[:, 0]
+            dh = Y[:, 1]
+
+            plt.figure(figsize=(12,5))
+
+            plt.subplot(1,2,1)
+            plt.hist(speed, bins=50)
+            plt.title(f"{title} - Speed/Disp")
+            plt.xlabel("Value")
+            plt.ylabel("Count")
+
+            plt.subplot(1,2,2)
+            plt.hist(np.degrees(dh), bins=50)
+            plt.title(f"{title} - Heading Change")
+            plt.xlabel("Value")
+            plt.ylabel("Count")
+
+            plt.tight_layout()
+            plt.show()
+
+
+        plot_y_distribution(Y_tr, "Train")
+        plot_y_distribution(Y_te, "Test")
         
         self.num_features = X_tr.shape[2]
         

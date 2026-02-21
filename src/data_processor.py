@@ -89,12 +89,8 @@ class DataProcessor:
         start_dt = df["Time"].iloc[0]
         df["Elapsed Time"] = (df["Time"] - start_dt).dt.total_seconds()
 
-        # df["Acc_Norm"] = np.linalg.norm(
-        #     df[["Accelerometer x", "Accelerometer y", "Accelerometer z"]].values, axis=1
-        # )
-
-        acc_cols = ["Accelerometer x", "Accelerometer y", "Accelerometer z"]
-        gyro_cols = ["Gyroscope x", "Gyroscope y", "Gyroscope z"]
+        # acc_cols = ["Accelerometer x", "Accelerometer y", "Accelerometer z"]
+        # gyro_cols = ["Gyroscope x", "Gyroscope y", "Gyroscope z"]
         
         # df = DataProcessor._lowpass_filter(
         #     df,
@@ -112,8 +108,12 @@ class DataProcessor:
         #     order=2
         # )
 
-        df["Acc_Norm"] = np.linalg.norm(df[acc_cols].values, axis=1)
-        df["Gyro_Norm"] = np.linalg.norm(df[gyro_cols].values, axis=1)
+        df["Acc_Norm"] = np.linalg.norm(
+            df[["Accelerometer x", "Accelerometer y", "Accelerometer z"]].values, axis=1
+        )
+        df["Gyro_Norm"] = np.linalg.norm(
+            df[["Gyroscope x", "Gyroscope y", "Gyroscope z"]].values, axis=1
+        )
 
         e, n, df = DataProcessor.llh_to_enu(df, flag, zone)
         v_10hz, dh_10Hz = DataProcessor.interpol_vAndh(e, n)
@@ -249,29 +249,65 @@ class DataProcessor:
 
         return e_corr, n_corr, df
     
+    # @staticmethod
+    # def interpol_vAndh(e, n):
+    #     delta_e = np.diff(e)
+    #     delta_n = np.diff(n)
+
+    #     v_1hz = (delta_e**2 + delta_n**2) ** 0.5
+    #     heading_1hz = np.arctan2(delta_n, delta_e)
+    #     dh_1hz = np.diff(np.unwrap(heading_1hz))
+    #     origin_v = v_1hz[1:]
+    #     origin_dh = dh_1hz
+
+    #     N = len(origin_v)  # 1Hz 샘플 수
+    #     t = np.arange(N, dtype=float)  # 0..N-1
+    #     t_new = np.linspace(0.0, N - 1, (N - 1) * 10 + 1)  # ✅ 10Hz로 0~N-1초, 총 (N-1)*10+1개
+    #     #t_new = np.linspace(0.0, N - 1, (N - 1) * 50 + 1)  # ✅ 50Hz로 0~N-1초, 총 (N-1)*50+1개
+    #     pv = PchipInterpolator(t, origin_v)
+    #     pdh = PchipInterpolator(t, origin_dh)
+        
+    #     v_10Hz = pv(t_new)
+    #     dh_10Hz = pdh(t_new)
+
+    #     return v_10Hz, dh_10Hz
+    
     @staticmethod
     def interpol_vAndh(e, n):
+        # 1Hz (실제로는 1초 간격 점)에서 heading 계산
         delta_e = np.diff(e)
         delta_n = np.diff(n)
 
-        v_1hz = (delta_e**2 + delta_n**2) ** 0.5
-        heading_1hz = np.arctan2(delta_n, delta_e)
-        dh_1hz = np.diff(np.unwrap(heading_1hz))
-        origin_v = v_1hz[1:]
-        origin_dh = dh_1hz
+        disp_1hz = np.hypot(delta_e, delta_n)          # 1초 변위 (m)
+        heading_1hz = np.arctan2(delta_n, delta_e)     # 1Hz heading (rad)
 
-        N = len(origin_v)  # 1Hz 샘플 수
-        t = np.arange(N, dtype=float)  # 0..N-1
-        t_new = np.linspace(0.0, N - 1, (N - 1) * 10 + 1)  # ✅ 10Hz로 0~N-1초, 총 (N-1)*10+1개
-        #t_new = np.linspace(0.0, N - 1, (N - 1) * 50 + 1)  # ✅ 50Hz로 0~N-1초, 총 (N-1)*50+1개
-        pv = PchipInterpolator(t, origin_v)
-        pdh = PchipInterpolator(t, origin_dh)
+        # 길이 맞추기: disp_1hz는 len=L-1, heading_1hz도 len=L-1
+        N = len(heading_1hz)
+        t = np.arange(N, dtype=float)  # 0..N-1 (초 index)
+
+        # 10Hz 타임라인: 1초당 10개 샘플
+        t_new = np.linspace(0.0, N - 1, (N - 1) * 10 + 1)
+
+        # heading은 unwrap한 뒤 보간 (중요!)
+        heading_unwrap = np.unwrap(heading_1hz)
+
+        p_disp = PchipInterpolator(t, disp_1hz)
+        p_head = PchipInterpolator(t, heading_unwrap)
+
+        disp_10Hz = p_disp(t_new)
+        head_10Hz = p_head(t_new)
+
+        # 다시 dh 계산: 10Hz에서의 heading 변화량(라디안/샘플)
+        dh_10Hz = np.diff(head_10Hz)
+        # 1초 누적 heading change (rad per 1s)
+        dh_1s_10Hz = np.convolve(dh_10Hz, np.ones(10), mode="valid")
         
-        v_10Hz = pv(t_new)
-        dh_10Hz = pdh(t_new)
+        # dh는 diff로 길이가 1 줄어드니까 disp_10Hz도 맞춰줌(선택)
+        disp_10Hz = disp_10Hz[1:]
+        head_10Hz = head_10Hz[1:]
 
-        return v_10Hz, dh_10Hz
-
+        return disp_10Hz, dh_1s_10Hz
+    
     @staticmethod
     def makeXY(df, v_10Hz, dh_10Hz, window_size):
         stride = 5
@@ -332,7 +368,6 @@ class DataProcessor:
 
     @staticmethod
     def load_and_preprocess_csv_test(file_path, skiprows=50):
-        # ... 기존 테스트용 전처리 로직 그대로 유지 ...
         df = pd.read_csv(file_path, skiprows=skiprows, skipfooter=100, engine="python")
 
         df.columns = [
@@ -358,26 +393,6 @@ class DataProcessor:
         df["Time"] = pd.to_datetime(df["Time"], format="%Y-%m-%d %H:%M:%S.%f")
         start_dt = df["Time"].iloc[0]
         df["Elapsed Time"] = (df["Time"] - start_dt).dt.total_seconds()
-
-        acc_cols = ["Accelerometer x", "Accelerometer y", "Accelerometer z"]
-        gyro_cols = ["Gyroscope x", "Gyroscope y", "Gyroscope z"]
-        
-        # df = DataProcessor._lowpass_filter(
-        #     df,
-        #     cols=gyro_cols,
-        #     fs=50.0,
-        #     cutoff=3.0,
-        #     order=2,
-        # )
-        
-        # df = DataProcessor._lowpass_filter(
-        #                 df,
-        #     cols=acc_cols,
-        #     fs=50.0,
-        #     cutoff=1.0,
-        #     order=2,
-        # )
-
 
         df["Acc_Norm"] = np.linalg.norm(
             df[["Accelerometer x", "Accelerometer y", "Accelerometer z"]].values, axis=1
