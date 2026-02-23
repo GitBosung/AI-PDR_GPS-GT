@@ -63,10 +63,19 @@ class TrajectoryPredictor:
         #stride = 1
         X = self._prepare_windows(df, stride)  # shape = (num_windows, window_size, num_features)
 
-        # 1) 모델 예측 (스케일된 Y_pred_scaled)
-        Y_pred_scaled = self.model.predict(X)  # shape = (num_windows, 2)
+        Y_pred_scaled = self.model.predict(X)
 
-        Y_pred = self.y_scaler.inverse_transform(Y_pred_scaled)   # (N, 2)
+        # ✅ 2-head output을 (N,2)로 합치기
+        if isinstance(Y_pred_scaled, dict):
+            y_speed_s = Y_pred_scaled["speed"]
+            y_dh_s    = Y_pred_scaled["dh"]
+            Y_pred_scaled = np.hstack([y_speed_s, y_dh_s])
+        elif isinstance(Y_pred_scaled, (list, tuple)):
+            y_speed_s, y_dh_s = Y_pred_scaled
+            Y_pred_scaled = np.hstack([y_speed_s, y_dh_s])
+
+        # ✅ y_scaler 1개로 inverse
+        Y_pred = self.y_scaler.inverse_transform(Y_pred_scaled)
         pred_speed = Y_pred[:, 0]
         pred_hc    = Y_pred[:, 1]
         

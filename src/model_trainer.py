@@ -10,30 +10,30 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import Huber
 from tensorflow.keras.layers import (
     Input, Conv1D, Add, Activation, Dropout, LSTM, 
-    LayerNormalization, GlobalAveragePooling1D, Dense
+    LayerNormalization, GlobalAveragePooling1D, Dense, MultiHeadAttention, Multiply, Lambda, Softmax
 )
 from tensorflow.keras import regularizers
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 
-# def attention_pooling(x):
-#     """
-#     x: (B, T, D)
-#     returns: (B, D)  (time-weighted sum)
-#     """
-#     # (B, T, 1) : 각 timestep 중요도 점수
-#     scores = Dense(1, name="attn_pool_score")(x)
+def attention_pooling(x):
+    """
+    x: (B, T, D)
+    returns: (B, D)  (time-weighted sum)
+    """
+    # (B, T, 1) : 각 timestep 중요도 점수
+    scores = Dense(1, name="attn_pool_score")(x)
 
-#     # (B, T, 1) : time 축으로 softmax -> 가중치
-#     weights = Softmax(axis=1, name="attn_pool_weights")(scores)
+    # (B, T, 1) : time 축으로 softmax -> 가중치
+    weights = Softmax(axis=1, name="attn_pool_weights")(scores)
 
-#     # (B, T, D) : 가중치 적용
-#     weighted = Multiply(name="attn_pool_apply")([x, weights])
+    # (B, T, D) : 가중치 적용
+    weighted = Multiply(name="attn_pool_apply")([x, weights])
 
-#     # (B, D) : time 축으로 가중합
-#     pooled = Lambda(lambda t: tf.reduce_sum(t, axis=1), name="attn_pool_sum")(weighted)
-#     return pooled
+    # (B, D) : time 축으로 가중합
+    pooled = Lambda(lambda t: tf.reduce_sum(t, axis=1), name="attn_pool_sum")(weighted)
+    return pooled
 
 class ModelTrainer:
     """
@@ -54,22 +54,27 @@ class ModelTrainer:
     # def build_model(self):
     #     inputs = Input(shape=(self.window_size, self.num_features))  # (B,T,F)
 
-    #     x = LSTM(128, return_sequences=True)(inputs)
-    #     x = LSTM(64, return_sequences=True)(x)
+    #     x = LSTM(256, return_sequences=True)(inputs)
+    #     x = LSTM(128, return_sequences=True)(x)
 
-    #     attn = MultiHeadAttention(num_heads=2, key_dim=32)(x, x)
+    #     attn = MultiHeadAttention(num_heads=4, key_dim=32, dropout=0.1)(x, x)
     #     x = Add()([x, attn])
-    #     # x = LayerNormalization()(x)
-    #     # x = Dropout(0.1)(x)
+    #     x = LayerNormalization()(x)
+    #     x = Dropout(0.1)(x)
 
     #     x = attention_pooling(x)
 
-    #     outputs = Dense(2)(x)
+    #     # ✅ 2-head output
+    #     speed_out = Dense(1, name="speed")(x)
+    #     dh_out    = Dense(1, name="dh")(x)
 
-    #     self.model = tf.keras.Model(inputs, outputs)
+    #     self.model = tf.keras.Model(inputs, [speed_out, dh_out])
+
     #     self.model.compile(
-    #         optimizer=Adam(learning_rate=1e-3),
-    #         loss="mae"
+    #         optimizer=Adam(learning_rate=5e-4),
+    #         loss={"speed": "mae", "dh": "mae"},
+    #         loss_weights={"speed": 1.0, "dh": 3.0},  # 필요하면 가중치 조절
+    #         metrics={"speed": ["mae"], "dh": ["mae"]},
     #     )
     #     return self.model
     
@@ -77,17 +82,20 @@ class ModelTrainer:
     def build_model(self):
         inputs = Input(shape=(self.window_size, self.num_features))
     
-        x = LSTM(256, return_sequences=True)(inputs)
-        x = LSTM(128, return_sequences=False)(x)
+        x = LSTM(128, return_sequences=True)(inputs)
+        x = LSTM(64, return_sequences=False)(x)
         
-        outputs = Dense(2)(x)
+        # ✅ 2-head output
+        speed_out = Dense(1, name="speed")(x)
+        dh_out    = Dense(1, name="dh")(x)
 
-        self.model = tf.keras.Model(inputs, outputs)
+        self.model = tf.keras.Model(inputs, [speed_out, dh_out])
 
         self.model.compile(
-            optimizer=Adam(learning_rate=1e-4),
-            loss="mse",
-            #metrics=["mse", Huber(delta=1.0)],
+            optimizer=Adam(learning_rate=5e-4),
+            loss={"speed": "mae", "dh": "mae"},
+            loss_weights={"speed": 1.0, "dh": 10.0},  # 필요하면 가중치 조절
+            #metrics={"speed": ["mae"], "dh": ["mae"]},
         )
         return self.model
     
@@ -146,6 +154,10 @@ class ModelTrainer:
         
         Y_tr_s = self.y_scaler.fit_transform(Y_tr)
         Y_te_s = self.y_scaler.transform(Y_te)
+        
+        # ✅ 2-head용 dict 타깃으로 분리 (스케일링 이후 분리)
+        Y_tr_dict = {"speed": Y_tr_s[:, 0:1], "dh": Y_tr_s[:, 1:2]}
+        Y_te_dict = {"speed": Y_te_s[:, 0:1], "dh": Y_te_s[:, 1:2]}
 
         self.build_model()
 
@@ -160,8 +172,8 @@ class ModelTrainer:
 
         history = self.model.fit(
             X_tr_s,
-            Y_tr_s,
-            validation_data=(X_te_s, Y_te_s),
+            Y_tr_dict,
+            validation_data=(X_te_s, Y_te_dict),
             batch_size=self.batch_size,
             epochs=self.epochs,
             callbacks=callbacks,
@@ -205,14 +217,59 @@ class ModelTrainer:
         return self.model
 
     def plot_training_history(self, history):
+        h = history.history
+        epochs = range(1, len(h["loss"]) + 1)
+
+        # -----------------------------
+        # 1) Total loss (optional)
+        # -----------------------------
         plt.figure(figsize=(8, 5))
-        epochs = range(1, len(history.history["loss"]) + 1)
-        plt.plot(epochs, history.history["loss"], label="Train Loss")
-        plt.plot(epochs, history.history["val_loss"], label="Val Loss")
-        plt.xlabel("Epochs")
-        plt.ylabel("MSE Loss")
-        plt.title("Training & Validation Loss")
-        plt.legend()
+        plt.plot(epochs, h["loss"], label="Train total loss")
+        plt.plot(epochs, h["val_loss"], label="Val total loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss (MAE)")
+        plt.title("Total Loss")
         plt.grid(True)
+        plt.legend()
+        plt.show()
+
+        # -----------------------------
+        # 2) Speed head: loss / mae
+        # -----------------------------
+        plt.figure(figsize=(8, 5))
+        if "speed_loss" in h:
+            plt.plot(epochs, h["speed_loss"], label="Train speed_loss")
+        if "val_speed_loss" in h:
+            plt.plot(epochs, h["val_speed_loss"], label="Val speed_loss")
+        if "speed_mae" in h:
+            plt.plot(epochs, h["speed_mae"], label="Train speed_mae", linestyle="--")
+        if "val_speed_mae" in h:
+            plt.plot(epochs, h["val_speed_mae"], label="Val speed_mae", linestyle="--")
+
+        plt.xlabel("Epoch")
+        plt.ylabel("MAE")
+        plt.title("Speed Head (loss / mae)")
+        plt.grid(True)
+        plt.legend()
+        plt.show()
+
+        # -----------------------------
+        # 3) DH head: loss / mae
+        # -----------------------------
+        plt.figure(figsize=(8, 5))
+        if "dh_loss" in h:
+            plt.plot(epochs, h["dh_loss"], label="Train dh_loss")
+        if "val_dh_loss" in h:
+            plt.plot(epochs, h["val_dh_loss"], label="Val dh_loss")
+        if "dh_mae" in h:
+            plt.plot(epochs, h["dh_mae"], label="Train dh_mae", linestyle="--")
+        if "val_dh_mae" in h:
+            plt.plot(epochs, h["val_dh_mae"], label="Val dh_mae", linestyle="--")
+
+        plt.xlabel("Epoch")
+        plt.ylabel("MAE")
+        plt.title("Heading Change Head (loss / mae)")
+        plt.grid(True)
+        plt.legend()
         plt.show()
 
