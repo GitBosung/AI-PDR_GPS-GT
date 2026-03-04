@@ -10,30 +10,12 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import Huber
 from tensorflow.keras.layers import (
     Input, Conv1D, Add, Activation, Dropout, LSTM, 
-    LayerNormalization, GlobalAveragePooling1D, Dense, MultiHeadAttention, Multiply, Lambda, Softmax
+    LayerNormalization, GlobalAveragePooling1D, Dense, MultiHeadAttention, Multiply, Lambda, Softmax, BatchNormalization
 )
 from tensorflow.keras import regularizers
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
-
-def attention_pooling(x):
-    """
-    x: (B, T, D)
-    returns: (B, D)  (time-weighted sum)
-    """
-    # (B, T, 1) : 각 timestep 중요도 점수
-    scores = Dense(1, name="attn_pool_score")(x)
-
-    # (B, T, 1) : time 축으로 softmax -> 가중치
-    weights = Softmax(axis=1, name="attn_pool_weights")(scores)
-
-    # (B, T, D) : 가중치 적용
-    weighted = Multiply(name="attn_pool_apply")([x, weights])
-
-    # (B, D) : time 축으로 가중합
-    pooled = Lambda(lambda t: tf.reduce_sum(t, axis=1), name="attn_pool_sum")(weighted)
-    return pooled
 
 class ModelTrainer:
     """
@@ -51,41 +33,12 @@ class ModelTrainer:
         self.y_scaler = None
         self.model = None
         
-    # def build_model(self):
-    #     inputs = Input(shape=(self.window_size, self.num_features))  # (B,T,F)
-
-    #     x = LSTM(256, return_sequences=True)(inputs)
-    #     x = LSTM(128, return_sequences=True)(x)
-
-    #     attn = MultiHeadAttention(num_heads=4, key_dim=32, dropout=0.1)(x, x)
-    #     x = Add()([x, attn])
-    #     x = LayerNormalization()(x)
-    #     x = Dropout(0.1)(x)
-
-    #     x = attention_pooling(x)
-
-    #     # ✅ 2-head output
-    #     speed_out = Dense(1, name="speed")(x)
-    #     dh_out    = Dense(1, name="dh")(x)
-
-    #     self.model = tf.keras.Model(inputs, [speed_out, dh_out])
-
-    #     self.model.compile(
-    #         optimizer=Adam(learning_rate=5e-4),
-    #         loss={"speed": "mae", "dh": "mae"},
-    #         loss_weights={"speed": 1.0, "dh": 3.0},  # 필요하면 가중치 조절
-    #         metrics={"speed": ["mae"], "dh": ["mae"]},
-    #     )
-    #     return self.model
-    
-    
     def build_model(self):
         inputs = Input(shape=(self.window_size, self.num_features))
     
-        x = LSTM(128, return_sequences=True)(inputs)
+        x = LSTM(128, return_sequences=True)(inputs)   
         x = LSTM(64, return_sequences=False)(x)
         
-        # ✅ 2-head output
         speed_out = Dense(1, name="speed")(x)
         dh_out    = Dense(1, name="dh")(x)
 
@@ -98,8 +51,6 @@ class ModelTrainer:
             #metrics={"speed": ["mae"], "dh": ["mae"]},
         )
         return self.model
-    
-
     
     def train_model(self, X, Y, test_size=0.2, random_state=42):
 

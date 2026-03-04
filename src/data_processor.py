@@ -367,8 +367,8 @@ class DataProcessor:
         return X, Y
 
     @staticmethod
-    def load_and_preprocess_csv_test(file_path, skiprows=50):
-        df = pd.read_csv(file_path, skiprows=skiprows, skipfooter=100, engine="python")
+    def load_and_preprocess_csv_test(file_path, skiprows=150):
+        df = pd.read_csv(file_path, skiprows=skiprows, skipfooter=50, engine="python")
 
         df.columns = [
             "Time",
@@ -390,6 +390,8 @@ class DataProcessor:
             "Altitude",
             "Speed_GPS",
         ]
+        
+        
         df["Time"] = pd.to_datetime(df["Time"], format="%Y-%m-%d %H:%M:%S.%f")
         start_dt = df["Time"].iloc[0]
         df["Elapsed Time"] = (df["Time"] - start_dt).dt.total_seconds()
