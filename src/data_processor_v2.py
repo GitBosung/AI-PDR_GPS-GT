@@ -24,32 +24,6 @@ class DataProcessor:
     def __init__(self, window_size=200):
         self.window_size = window_size
         
-    @staticmethod
-    def _lowpass_filter(df, cols, fs=50.0, cutoff=5.0, order=4):
-        """
-        Butterworth 저역통과필터 적용
-
-        fs: 샘플링 주파수 (Hz)
-        cutoff: 컷오프 주파수 (Hz)
-        order: 필터 차수
-        """
-        nyq = 0.5 * fs
-        normal_cutoff = cutoff / nyq
-
-        b, a = butter(order, normal_cutoff, btype="low", analog=False)
-
-        for c in cols:
-            x = df[c].astype(float).to_numpy()
-
-            # 너무 짧으면 필터 생략
-            if len(x) < order * 3:
-                continue
-
-            df[c] = filtfilt(b, a, x)
-
-        return df
-
-
     def load_and_preprocess_csv(
         file_path, skiprows=100, skipfooter=100, flag=False, zone=52, window_size=200
     ):
@@ -91,25 +65,6 @@ class DataProcessor:
         start_dt = df["Time"].iloc[0]
         df["Elapsed Time"] = (df["Time"] - start_dt).dt.total_seconds()
 
-        # acc_cols = ["Accelerometer x", "Accelerometer y", "Accelerometer z"]
-        # gyro_cols = ["Gyroscope x", "Gyroscope y", "Gyroscope z"]
-        
-        # df = DataProcessor._lowpass_filter(
-        #     df,
-        #     cols=gyro_cols,
-        #     fs=50.0,     
-        #     cutoff=3.0,  
-        #     order=2
-        # )
-        
-        # df = DataProcessor._lowpass_filter(
-        #     df,
-        #     cols=acc_cols,
-        #     fs=50.0,     
-        #     cutoff=3.0,  
-        #     order=2
-        # )
-
         df["Acc_Norm"] = np.linalg.norm(
             df[["Accelerometer x", "Accelerometer y", "Accelerometer z"]].values, axis=1
         )
@@ -119,45 +74,9 @@ class DataProcessor:
 
         e, n, df = DataProcessor.llh_to_enu(df, flag, zone)
         v_10hz, dh_10Hz = DataProcessor.interpol_vAndh(e, n)
-        X, Y = DataProcessor.makeXY(df, v_10hz, dh_10Hz, window_size=window_size)
+        dh_50Hz = DataProcessor.heading_ref(df)
+        X, Y = DataProcessor.makeXY(df, v_10hz, dh_50Hz, window_size=window_size)
         
-        y_e = []
-        y_n = []
-        dx = 0.0
-        dy = 0.0
-        heading = 0
-
-        stride = 5
-
-        plt.plot(e, n, ".-")
-        plt.axis("equal")
-        plt.grid()
-        plt.show()
-
-        for v, h in zip(Y[:, 0], Y[:, 1]):
-            heading += h * (stride / window_size)
-            dx += (v * (stride / window_size)) * np.cos(heading)
-            dy += (v * (stride / window_size)) * np.sin(heading)
-            y_e.append(dx)
-            y_n.append(dy)
-
-        plt.plot(e, n, ".-", label="Y_true")
-        plt.plot(y_e, y_n, ".-", label="Y_label", alpha=0.8)
-        plt.xlabel("E (m)")
-        plt.ylabel("N (m)")
-        plt.legend()
-        plt.grid()
-        plt.axis("equal")
-        plt.show()
-
-        plt.plot(
-            np.cumsum(np.degrees(Y[:, 1])) * (stride / window_size), label="Y_dh"
-        )
-        plt.gca().yaxis.set_major_locator(MultipleLocator(90))
-        plt.grid()
-        plt.legend()
-        plt.show()
-
         return df, X, Y
 
     @staticmethod
@@ -288,35 +207,8 @@ class DataProcessor:
 
         return e_corr, n_corr, df
     
-    # @staticmethod
-    # def interpol_vAndh(e, n):
-    #     delta_e = np.diff(e)
-    #     delta_n = np.diff(n)
-
-    #     v_1hz = (delta_e**2 + delta_n**2) ** 0.5
-    #     heading_1hz = np.arctan2(delta_n, delta_e)
-    #     dh_1hz = np.diff(np.unwrap(heading_1hz))
-    #     origin_v = v_1hz[1:]
-    #     origin_dh = dh_1hz
-
-    #     N = len(origin_v)  # 1Hz 샘플 수
-    #     t = np.arange(N, dtype=float)  # 0..N-1
-    #     t_new = np.linspace(0.0, N - 1, (N - 1) * 10 + 1)  # ✅ 10Hz로 0~N-1초, 총 (N-1)*10+1개
-    #     #t_new = np.linspace(0.0, N - 1, (N - 1) * 50 + 1)  # ✅ 50Hz로 0~N-1초, 총 (N-1)*50+1개
-    #     pv = PchipInterpolator(t, origin_v)
-    #     pdh = PchipInterpolator(t, origin_dh)
-        
-    #     v_10Hz = pv(t_new)
-    #     dh_10Hz = pdh(t_new)
-
-    #     return v_10Hz, dh_10Hz
-    
     @staticmethod
     def interpol_vAndh(e, n):
-        
-        deg_threshold = 3.0
-        
-        # 1Hz (실제로는 1초 간격 점)에서 heading 계산
         delta_e = np.diff(e)
         delta_n = np.diff(n)
 
@@ -339,16 +231,8 @@ class DataProcessor:
 
         disp_10Hz = p_disp(t_new)
         head_10Hz = p_head(t_new)
-
-        # 다시 dh 계산: 10Hz에서의 heading 변화량(라디안/샘플)
         dh_10Hz = np.diff(head_10Hz)
-        # 1초 누적 heading change (rad per 1s)
         dh_1s_10Hz = np.convolve(dh_10Hz, np.ones(10), mode="valid")
-        
-        # dh_1s_10Hz_deg = np.degrees(dh_1s_10Hz)
-        # dh_1s_10Hz_deg[np.abs(dh_1s_10Hz_deg) <= 1] = 0
-        # dh_1s_10Hz = np.radians(dh_1s_10Hz_deg)
-        
         
         # dh는 diff로 길이가 1 줄어드니까 disp_10Hz도 맞춰줌(선택)
         disp_10Hz = disp_10Hz[1:]
@@ -356,42 +240,88 @@ class DataProcessor:
 
         return disp_10Hz, dh_1s_10Hz
     
-    # @staticmethod
-    # def interpol_vAndh(e, n, deg_threshold=3.0):
-    #     delta_e = np.diff(e)
-    #     delta_n = np.diff(n)
+    @staticmethod
+    def heading_ref(df):
+        fs = 50.0
+        dt = 1.0 / fs
+        
+        # pandas Series -> numpy array (복사본)
+        gx = df["Gyroscope x"].to_numpy(dtype=float, copy=True)
+        gy = df["Gyroscope y"].to_numpy(dtype=float, copy=True)
+        gz = df["Gyroscope z"].to_numpy(dtype=float, copy=True)
 
-    #     disp_1hz = np.hypot(delta_e, delta_n)
-    #     heading_1hz = np.arctan2(delta_n, delta_e)
+        qx = df["Orientation x"].to_numpy(dtype=float, copy=True)
+        qy = df["Orientation y"].to_numpy(dtype=float, copy=True)
+        qz = df["Orientation z"].to_numpy(dtype=float, copy=True)
+        
+        # =========================
+        # 3. qw 복원
+        # =========================
+        qw_sq = 1.0 - (qx**2 + qy**2 + qz**2)
+        qw_sq = np.clip(qw_sq, 0.0, None)
+        qw = np.sqrt(qw_sq)
+        
+        # =========================
+        # 4. 쿼터니언 부호 연속성 보정
+        # =========================
+        for i in range(1, len(qw)):
+            dot = (
+                qw[i-1] * qw[i]
+                + qx[i-1] * qx[i]
+                + qy[i-1] * qy[i]
+                + qz[i-1] * qz[i]
+            )
+            if dot < 0:
+                qw[i] = -qw[i]
+                qx[i] = -qx[i]
+                qy[i] = -qy[i]
+                qz[i] = -qz[i]
 
-    #     # unwrap
-    #     heading_unwrap = np.unwrap(heading_1hz)
+        # =========================
+        # 5. pitch 계산
+        # =========================
+        pitch = np.arctan2(
+            2.0 * (qw * qx + qy * qz),
+            1.0 - 2.0 * (qx * qx + qy * qy)
+        )
+        
+        
+        pitch_deg = np.degrees(pitch)
 
-    #     # 1Hz heading change
-    #     dh_1hz = np.diff(heading_unwrap)
+        # =========================
+        # 6. pitch 제거하여 gyro 보정
+        # y축 회전 inverse 적용
+        # =========================
+        gyro_corr = np.zeros((len(gx), 3))
 
-    #     # 작은 변화 제거
-    #     dh_1hz_deg = np.degrees(dh_1hz)
-    #     dh_1hz_deg[np.abs(dh_1hz_deg) < deg_threshold] = 0.0
-    #     dh_1hz = np.radians(dh_1hz_deg)
+        for i in range(len(gx)):
+            c = np.cos(pitch[i])
+            s = np.sin(pitch[i])
 
-    #     # disp는 길이 맞추기
-    #     disp_used = disp_1hz[1:]   # dh_1hz와 길이 맞춤
+            R_inv_pitch = np.array([
+                [ 1,  0, 0],
+                [ 0,  c,  -s],
+                [ 0,  s,  c]
+            ])
 
-    #     N = len(dh_1hz)
-    #     t = np.arange(N, dtype=float)
-    #     t_new = np.linspace(0.0, N - 1, (N - 1) * 10 + 1)
+            g = np.array([gx[i], gy[i], gz[i]])
+            gyro_corr[i] = R_inv_pitch @ g
 
-    #     p_disp = PchipInterpolator(t, disp_used)
-    #     p_dh   = PchipInterpolator(t, dh_1hz)
+        gx_corr = gyro_corr[:, 0]
+        gy_corr = gyro_corr[:, 1]
+        gz_corr = gyro_corr[:, 2]
 
-    #     disp_10Hz = p_disp(t_new)
-    #     dh_10Hz   = p_dh(t_new)
+        theta_z = np.cumsum(gz_corr) * dt
 
-    #     return disp_10Hz, dh_10Hz
+        theta_z_deg = np.degrees(theta_z)
+        
+        dh_50hz = np.diff(theta_z)
+        
+        return dh_50hz
+    
     
     @staticmethod
-    def makeXY(df, v_10Hz, dh_10Hz, window_size):
+    def makeXY(df, v_10Hz, dh_50Hz, window_size):
         stride = 5
         sensor_cols = [
             "Accelerometer x",
@@ -428,7 +358,7 @@ class DataProcessor:
 
         offsets = [0, 10, 20, 30]  # 1초 간격 (10Hz 기준)
         #offsets = [0, 50, 100, 150]
-        for i in range(len(dh_10Hz) - max(offsets)):
+        for i in range(len(v_10Hz) - max(offsets)):
             # v: 1초 단위 4개를 합
             Y_v.append(
                 v_10Hz[i + offsets[0]]
@@ -436,26 +366,32 @@ class DataProcessor:
                 + v_10Hz[i + offsets[2]]
                 + v_10Hz[i + offsets[3]]
             )
-
-            dh_sum = (
-                dh_10Hz[i + offsets[0]]
-                + dh_10Hz[i + offsets[1]]
-                + dh_10Hz[i + offsets[2]]
-                + dh_10Hz[i + offsets[3]]
-            )
             
-            # if abs(np.degrees(dh_sum)) <= 20:
-            #     dh_sum = 0
-                
+        # -------------------------
+        # 3) Y_dh (🔥 핵심)
+        # -------------------------
+        Y_dh = []
+        for i in range(0, len(dh_50Hz) - window_size + 1, stride):
+            dh_sum = np.sum(dh_50Hz[i : i + window_size])
+            if np.abs(np.degrees(dh_sum)) < 3:
+                dh_sum = 0
             Y_dh.append(dh_sum)
 
+        # -------------------------
+        # 4) 길이 맞추기
+        # -------------------------
+        min_len = min(len(X), len(Y_v), len(Y_dh))
+        X = X[:min_len]
+        Y_v = Y_v[:min_len]
+        Y_dh = Y_dh[:min_len]
+
         Y = np.stack([Y_v, Y_dh], axis=1)
-        X = X[: len(Y)]
+
         return X, Y
 
     @staticmethod
     def load_and_preprocess_csv_test(file_path, skiprows=50):
-        df = pd.read_csv(file_path, skiprows=skiprows, skipfooter=100, engine="python")
+        df = pd.read_csv(file_path, skiprows=skiprows, skipfooter=50, engine="python")
 
         df.columns = [
             "Time",

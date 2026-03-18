@@ -84,6 +84,9 @@ class TrajectoryPredictor:
             pred_speed = pred_speed * (stride/self.window_size)
             pred_hc    = pred_hc * (stride/self.window_size)
             
+        #-2 ~ 2 degree 구간이면 0으로 처리
+        #pred_hc = np.where(np.abs(np.degrees(pred_hc)) <= 1.0, 0, pred_hc)
+            
         # -------------------------------
         # 속도 예측 그래프
         # -------------------------------
