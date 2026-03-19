@@ -33,66 +33,66 @@ class ModelTrainer:
         self.y_scaler = None
         self.model = None
     
-    #def build_model(self):
-        # inputs = Input(shape=(self.window_size, self.num_features))
-    
-        # x = LSTM(128, return_sequences=True)(inputs)   
-        # x = LSTM(64, return_sequences=False)(x)
-        
-        # speed_out = Dense(1, name="speed")(x)
-        # dh_out    = Dense(1, name="dh")(x)
-
-        # self.model = tf.keras.Model(inputs, [speed_out, dh_out])
-
-        # self.model.compile(
-        #     optimizer=Adam(learning_rate=5e-4),
-        #     loss={"speed": "mae", "dh": "mae"},
-        #     loss_weights={"speed": 1.0, "dh": 10.0},  # 필요하면 가중치 조절
-        #     #metrics={"speed": ["mae"], "dh": ["mae"]},
-        # )
-        # return self.model
-        
     def build_model(self):
         inputs = Input(shape=(self.window_size, self.num_features))
-
-        # ------------------------
-        # 1. LSTM feature extraction
-        # ------------------------
-        x = LSTM(128, return_sequences=True)(inputs)
-        x = LSTM(64, return_sequences=True)(x)   
-
-        # ------------------------
-        # 2. Multi-Head Attention
-        # ------------------------
-        attn_out = MultiHeadAttention(
-            num_heads=4,
-            key_dim=32
-        )(x, x)
-
-        # Residual + Norm (중요)
-        x = Add()([x, attn_out])
-        x = LayerNormalization()(x)
-
-        # ------------------------
-        # 3. Sequence → vector
-        # ------------------------
-        x = GlobalAveragePooling1D()(x)
-
-        # ------------------------
-        # 4. Output
-        # ------------------------
+    
+        x = LSTM(128, return_sequences=True)(inputs)   
+        x = LSTM(64, return_sequences=False)(x)
+        
         speed_out = Dense(1, name="speed")(x)
         dh_out    = Dense(1, name="dh")(x)
 
-        self.model = Model(inputs, [speed_out, dh_out])
+        self.model = tf.keras.Model(inputs, [speed_out, dh_out])
 
         self.model.compile(
             optimizer=Adam(learning_rate=5e-4),
             loss={"speed": "mae", "dh": "mae"},
-            loss_weights={"speed": 1.0, "dh": 10.0},
+            loss_weights={"speed": 1.0, "dh": 10.0},  # 필요하면 가중치 조절
+            #metrics={"speed": ["mae"], "dh": ["mae"]},
         )
-
         return self.model
+        
+    # def build_model(self):
+    #     inputs = Input(shape=(self.window_size, self.num_features))
+
+    #     # ------------------------
+    #     # 1. LSTM feature extraction
+    #     # ------------------------
+    #     x = LSTM(128, return_sequences=True)(inputs)
+    #     x = LSTM(64, return_sequences=True)(x)   
+
+    #     # ------------------------
+    #     # 2. Multi-Head Attention
+    #     # ------------------------
+    #     attn_out = MultiHeadAttention(
+    #         num_heads=4,
+    #         key_dim=32
+    #     )(x, x)
+
+    #     # Residual + Norm (중요)
+    #     x = Add()([x, attn_out])
+    #     x = LayerNormalization()(x)
+
+    #     # ------------------------
+    #     # 3. Sequence → vector
+    #     # ------------------------
+    #     x = GlobalAveragePooling1D()(x)
+
+    #     # ------------------------
+    #     # 4. Output
+    #     # ------------------------
+    #     speed_out = Dense(1, name="speed")(x)
+    #     dh_out    = Dense(1, name="dh")(x)
+
+    #     self.model = Model(inputs, [speed_out, dh_out])
+
+    #     self.model.compile(
+    #         optimizer=Adam(learning_rate=5e-4),
+    #         loss={"speed": "mae", "dh": "mae"},
+    #         loss_weights={"speed": 1.0, "dh": 10.0},
+    #     )
+
+    #     return self.model
     
  
     def train_model(self, X, Y, test_size=0.2, random_state=42):
