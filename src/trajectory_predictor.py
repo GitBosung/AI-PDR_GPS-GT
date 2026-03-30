@@ -21,7 +21,7 @@ class TrajectoryPredictor:
         cols = [
             'Accelerometer x','Accelerometer y','Accelerometer z',
             'Gyroscope x','Gyroscope y','Gyroscope z',
-            'Acc_Norm','Gyro_Norm'
+            'Acc_Norm', #'Gyro_Norm'
         ]
 
         arr = df[cols].values.astype(np.float32)

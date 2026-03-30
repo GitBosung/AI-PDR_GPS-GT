@@ -6,7 +6,6 @@ from scipy.interpolate import PchipInterpolator
 import math
 import matplotlib.pyplot as plt
 from numpy.lib.stride_tricks import sliding_window_view
-from scipy.signal import butter, filtfilt
 
 from matplotlib.ticker import MultipleLocator
 
@@ -222,6 +221,7 @@ class DataProcessor:
 
         # 10Hz 타임라인: 1초당 10개 샘플
         t_new = np.linspace(0.0, N - 1, (N - 1) * 10 + 1)
+        #t_new = np.linspace(0.0, N - 1, (N - 1) * 50 + 1)
 
         # heading은 unwrap한 뒤 보간 (중요!)
         heading_unwrap = np.unwrap(heading_1hz)
@@ -331,7 +331,7 @@ class DataProcessor:
 
         # gz_corr = gz_corr - bias_rad_per_sec
 
-        # # 보정 후 다시 적분
+        # 보정 후 다시 적분
         # theta_z = np.cumsum(gz_corr) * dt
         # theta_z_deg = np.degrees(theta_z)
         
@@ -351,7 +351,7 @@ class DataProcessor:
             "Gyroscope y",
             "Gyroscope z",
             "Acc_Norm",
-            "Gyro_Norm",
+            #"Gyro_Norm",
         ]
 
         values = df[sensor_cols].to_numpy()   # (N, num_features)
@@ -393,14 +393,15 @@ class DataProcessor:
         Y_dh = []
         for i in range(0, len(dh_50Hz) - window_size + 1, stride):
             dh_sum = np.sum(dh_50Hz[i : i + window_size])
-            if np.abs(np.degrees(dh_sum)) < 3:
-                dh_sum = 0
+            if np.abs(np.degrees(dh_sum)) < 3.0:
+                dh_sum = 0.0
             Y_dh.append(dh_sum)
 
         # -------------------------
         # 4) 길이 맞추기
         # -------------------------
         min_len = min(len(X), len(Y_v), len(Y_dh))
+        print(len(X), len(Y_v), len(Y_dh))
         X = X[:min_len]
         Y_v = Y_v[:min_len]
         Y_dh = Y_dh[:min_len]
@@ -408,6 +409,8 @@ class DataProcessor:
         Y = np.stack([Y_v, Y_dh], axis=1)
 
         return X, Y
+
+
 
     @staticmethod
     def load_and_preprocess_csv_test(file_path, skiprows=50):
@@ -458,6 +461,7 @@ class DataProcessor:
         expected_total_deg=0,
         window_size=200,
         time_tolerance="10ms",
+        heading_corr = False,
     ):
         # -----------------------------
         # 1. CSV 로드
@@ -555,6 +559,7 @@ class DataProcessor:
         ]
 
         df_ref_small = df_ref[ref_cols].copy()
+        df_ref_small = df_ref_small.rename(columns={"Time": "ref_Time"})
 
         rename_dict = {
             "Accelerometer x": "ref_Accelerometer x",
@@ -576,17 +581,26 @@ class DataProcessor:
         # -----------------------------
         # 5. Time 기준 가장 가까운 샘플끼리 merge
         # -----------------------------
+        # df = pd.merge_asof(
+        #     df_sensor.sort_values("Time"),
+        #     df_ref_small.sort_values("Time"),
+        #     on="Time",
+        #     direction="nearest",
+        #     tolerance=pd.Timedelta(time_tolerance),
+        # )
+        
         df = pd.merge_asof(
-            df_sensor.sort_values("Time"),
-            df_ref_small.sort_values("Time"),
-            on="Time",
-            direction="nearest",
-            tolerance=pd.Timedelta(time_tolerance),
+        df_sensor.sort_values("Time"),
+        df_ref_small.sort_values("ref_Time"),
+        left_on="Time",
+        right_on="ref_Time",
+        direction="nearest",
+        tolerance=pd.Timedelta(time_tolerance),
         )
-
+        
         # ref가 매칭 안 된 행 제거
         df = df.dropna(subset=["ref_Latitude", "ref_Longitude"]).reset_index(drop=True)
-
+        
         # 필요하면 sensor GPS 대신 ref GPS를 메인 GPS로 덮어쓰기
         df["Latitude"] = df["ref_Latitude"]
         df["Longitude"] = df["ref_Longitude"]
@@ -603,7 +617,7 @@ class DataProcessor:
         df["Gyro_Norm"] = np.linalg.norm(
             df[["Gyroscope x", "Gyroscope y", "Gyroscope z"]].values, axis=1
         )
-
+        
         # -------------------------------------------------------
         # 이제 GPS는 ref 기준으로 계산
         # -------------------------------------------------------
@@ -637,51 +651,7 @@ class DataProcessor:
 
         e = df["E"][df["E"].notna()].values
         n = df["N"][df["N"].notna()].values
-
-        delta_e = np.diff(e)
-        delta_n = np.diff(n)
-        step = np.hypot(delta_e, delta_n)
-
-        stop_mask = step < 0.05
-        mask = ~stop_mask
-        gps_idx_all = np.arange(1, len(e))
-        bad_idx = gps_idx_all[~mask]
-
-        print(f"총 GPS 샘플: {len(e)}, 이상치 GPS 샘플: {len(bad_idx)}")
-
-        # -------------------------------------------------------
-        # (4) 센서데이터 블록 drop (1Hz GPS → 50Hz 센서)
-        # -------------------------------------------------------
-        drop_idx = []
-        for gi in bad_idx:
-            start = gi * 50
-            end = (gi + 1) * 50
-            drop_idx.extend(range(start, min(end, len(df))))
-        df = df.drop(drop_idx).reset_index(drop=True)
-
-        # --- drop 이후 다시 ref GPS 기준 ENU 계산 ---
-        valid_gps_mask = (
-            df["ref_Latitude"].notna()
-            & df["ref_Longitude"].notna()
-            & (df["ref_Latitude"].astype(str).str.strip() != "")
-            & (df["ref_Longitude"].astype(str).str.strip() != "")
-        )
-
-        valid_lat = pd.to_numeric(df.loc[valid_gps_mask, "ref_Latitude"], errors="coerce")
-        valid_lon = pd.to_numeric(df.loc[valid_gps_mask, "ref_Longitude"], errors="coerce")
-
-        final_mask = valid_lat.notna() & valid_lon.notna()
-        valid_lat = valid_lat[final_mask].values
-        valid_lon = valid_lon[final_mask].values
-
-        if len(valid_lat) < 2:
-            raise ValueError("유효 ref GPS가 drop 이후 2개 미만으로 남음")
-
-        proj_enu = Proj(proj="utm", zone=zone, ellps="WGS84", south=False)
-        e0, n0 = proj_enu(valid_lon[0], valid_lat[0])
-        e_valid, n_valid = proj_enu(valid_lon, valid_lat)
-        e, n = e_valid - e0, n_valid - n0
-
+        
         dx0, dy0 = e[1] - e[0], n[1] - n[0]
         theta0 = math.atan2(dy0, dx0)
         R0 = np.array([
@@ -701,6 +671,7 @@ class DataProcessor:
         N = len(heading_1hz)
         t = np.arange(N, dtype=float)
         t_new = np.linspace(0.0, N - 1, (N - 1) * 10 + 1)
+        #t_new = np.linspace(0.0, N - 1, (N - 1) * 50 + 1)
 
         heading_unwrap = np.unwrap(heading_1hz)
 
@@ -709,11 +680,11 @@ class DataProcessor:
 
         disp_10Hz = p_disp(t_new)
         head_10Hz = p_head(t_new)
-        dh_10Hz = np.diff(head_10Hz)
-        dh_1s_10Hz = np.convolve(dh_10Hz, np.ones(10), mode="valid")
+        # dh_10Hz = np.diff(head_10Hz)
+        # dh_1s_10Hz = np.convolve(dh_10Hz, np.ones(10), mode="valid")
 
-        disp_10Hz = disp_10Hz[1:]
-        head_10Hz = head_10Hz[1:]
+        # disp_10Hz = disp_10Hz[1:]
+        # head_10Hz = head_10Hz[1:]
 
         v_10Hz = disp_10Hz.copy()
 
@@ -772,24 +743,23 @@ class DataProcessor:
         theta_z = np.cumsum(gz_corr) * dt
         theta_z_deg = np.degrees(theta_z)
         
-        # observed_total_deg = theta_z_deg[-1]
-        # #snapped_total_deg = 90.0 * np.round(observed_total_deg / 90.0)
-        # snapped_total_deg = expected_total_deg
-        # total_time = len(gz_corr) * dt
-        # bias_deg_per_sec = (observed_total_deg - snapped_total_deg) / total_time
-        # bias_rad_per_sec = np.radians(bias_deg_per_sec)
+        if heading_corr:
+            observed_total_deg = theta_z_deg[-1]
+            # #snapped_total_deg = 90.0 * np.round(observed_total_deg / 90.0)
+            # snapped_total_deg = expected_total_deg
+            # total_time = len(gz_corr) * dt
+            # bias_deg_per_sec = (observed_total_deg - snapped_total_deg) / total_time
+            # bias_rad_per_sec = np.radians(bias_deg_per_sec)
 
-        # # print(f"observed_total_deg = {observed_total_deg:.3f}")
-        # # print(f"snapped_total_deg  = {snapped_total_deg:.3f}")
-        # # print(f"estimated_bias     = {bias_deg_per_sec:.6f} deg/s")
 
-        # gz_corr = gz_corr - bias_rad_per_sec
+            # gz_corr = gz_corr - bias_rad_per_sec
 
-        # # 보정 후 다시 적분
-        # theta_z = np.cumsum(gz_corr) * dt
-        # theta_z_deg = np.degrees(theta_z)
-
+            # # 보정 후 다시 적분
+            # theta_z = np.cumsum(gz_corr) * dt
+            # theta_z_deg = np.degrees(theta_z)
         dh_50Hz = np.diff(theta_z)
+        
+        
 
         stride = 5
         sensor_cols = [
@@ -800,7 +770,7 @@ class DataProcessor:
             "Gyroscope y",
             "Gyroscope z",
             "Acc_Norm",
-            "Gyro_Norm",
+            #"Gyro_Norm",
         ]
 
         values = df[sensor_cols].to_numpy()
@@ -817,6 +787,7 @@ class DataProcessor:
 
         Y_v = []
         offsets = [0, 10, 20, 30]
+        #offsets = [0, 50, 100, 150]
 
         for i in range(len(v_10Hz) - max(offsets)):
             Y_v.append(
@@ -829,8 +800,8 @@ class DataProcessor:
         Y_dh = []
         for i in range(0, len(dh_50Hz) - window_size + 1, stride):
             dh_sum = np.sum(dh_50Hz[i:i + window_size])
-            if np.abs(np.degrees(dh_sum)) < 3:
-                dh_sum = 0
+            if np.abs(np.degrees(dh_sum)) < 3.0:
+                dh_sum = 0.0
             Y_dh.append(dh_sum)
 
         min_len = min(len(X), len(Y_v), len(Y_dh))
@@ -839,6 +810,40 @@ class DataProcessor:
         Y_dh = Y_dh[:min_len]
 
         Y = np.stack([Y_v, Y_dh], axis=1)
-
-        return df, X, Y
         
+        # window_size = 200
+
+        y_e = []
+        y_n = []
+        dx = 0.0
+        dy = 0.0
+        heading = 0
+
+        #stride = 1
+
+        for v, h in zip(Y[:, 0], Y[:, 1]):
+            heading += h * (stride / window_size)
+            dx += (v * (stride / window_size)) * np.cos(heading)
+            dy += (v * (stride / window_size)) * np.sin(heading)
+            y_e.append(dx)
+            y_n.append(dy)
+
+        plt.plot(e_corr, n_corr, ".-", label="Y_true")
+        plt.plot(y_e, y_n, ".-", label="Y_label", alpha=0.8)
+        plt.xlabel("E (m)")
+        plt.ylabel("N (m)")
+        plt.legend()
+        plt.grid()
+        plt.axis("equal")
+        plt.show()
+
+        plt.plot(
+            np.cumsum(np.degrees(Y[:, 1])) * (stride / window_size), label="Y_dh"
+        )
+        plt.gca().yaxis.set_major_locator(MultipleLocator(90))
+        plt.grid()
+        plt.legend()
+        plt.show()
+        
+        return df, X, Y
+    

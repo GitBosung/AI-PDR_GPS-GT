@@ -17,6 +17,39 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 
+def transformer_encoder(x, head_size, num_heads, ff_dim, dropout=0.1):
+    # ------------------------
+    # 1. Multi-Head Attention
+    # ------------------------
+    attn = MultiHeadAttention(
+        num_heads=num_heads,
+        key_dim=head_size
+    )(x, x)
+
+    attn = Dropout(dropout)(attn)
+    x = Add()([x, attn])
+    x = LayerNormalization()(x)
+
+    # ------------------------
+    # 2. Feed Forward Network (핵심)
+    # ------------------------
+    ff = Dense(ff_dim, activation="relu")(x)
+    ff = Dense(x.shape[-1])(ff)
+
+    ff = Dropout(dropout)(ff)
+    x = Add()([x, ff])
+    x = LayerNormalization()(x)
+
+    return x
+
+def weighted_mae_dh(y_true, y_pred):
+    error = tf.abs(y_true - y_pred)
+
+    # 🔥 핵심: 회전 클수록 weight 증가
+    weight = 1.0 + 5.0 * tf.abs(y_true)   # scale 조절 가능
+
+    return tf.reduce_mean(error * weight)
+
 class ModelTrainer:
     """
     - build_model: LSTM + MultiHeadAttention 구조의 모델을 생성합니다.
@@ -32,26 +65,66 @@ class ModelTrainer:
         self.x_scaler = None
         self.y_scaler = None
         self.model = None
+        
+
+
+    # def build_model(self):
+    #     inputs = Input(shape=(self.window_size, self.num_features))
+
+    #     # ------------------------
+    #     # 1. LSTM (low-level temporal)
+    #     # ------------------------
+    #     x = LSTM(128, return_sequences=True)(inputs)
+
+    #     # ------------------------
+    #     # 2. Transformer Encoder (핵심)
+    #     # ------------------------
+    #     x = transformer_encoder(x, head_size=32, num_heads=4, ff_dim=128)
+    #     x = transformer_encoder(x, head_size=32, num_heads=4, ff_dim=128)
+
+    #     # ------------------------
+    #     # 3. Global pooling
+    #     # ------------------------
+    #     x = GlobalAveragePooling1D()(x)
+
+    #     # ------------------------
+    #     # 4. Output branches
+    #     # ------------------------
+    #     speed_out = Dense(1, name="speed")(x)
+    #     dh_out = Dense(1, name="dh")(x)
+
+    #     self.model = Model(inputs, [speed_out, dh_out])
+
+    #     self.model.compile(
+    #         optimizer=Adam(learning_rate=3e-4),  # 약간 낮추는게 좋음
+    #         loss={"speed": "mae", "dh": "mae"},
+    #         loss_weights={"speed": 1.0, "dh": 10.0},
+    #     )
+
+    #     return self.model
     
     def build_model(self):
         inputs = Input(shape=(self.window_size, self.num_features))
     
         x = LSTM(128, return_sequences=True)(inputs)   
-        x = LSTM(64, return_sequences=False)(x)
+        x = LSTM(128, return_sequences=False)(x)
         
-        speed_out = Dense(1, name="speed")(x)
-        dh_out    = Dense(1, name="dh")(x)
+        speed_branch = Dense(64, activation="relu")(x)
+        speed_out = Dense(1, name="speed")(speed_branch)
+
+        dh_branch = Dense(64, activation="relu")(x)
+        dh_out = Dense(1, name="dh")(dh_branch)
 
         self.model = tf.keras.Model(inputs, [speed_out, dh_out])
 
         self.model.compile(
-            optimizer=Adam(learning_rate=5e-4),
+            optimizer=Adam(learning_rate=1e-3),
             loss={"speed": "mae", "dh": "mae"},
-            loss_weights={"speed": 1.0, "dh": 10.0},  # 필요하면 가중치 조절
+            loss_weights={"speed": 1.0, "dh": 10.0},  
             #metrics={"speed": ["mae"], "dh": ["mae"]},
         )
         return self.model
-        
+    
     # def build_model(self):
     #     inputs = Input(shape=(self.window_size, self.num_features))
 
@@ -81,20 +154,20 @@ class ModelTrainer:
     #     # ------------------------
     #     # 4. Output
     #     # ------------------------
+    #     # 4. Output branches
     #     speed_out = Dense(1, name="speed")(x)
-    #     dh_out    = Dense(1, name="dh")(x)
+    #     dh_out = Dense(1, name="dh")(x)
 
     #     self.model = Model(inputs, [speed_out, dh_out])
 
     #     self.model.compile(
-    #         optimizer=Adam(learning_rate=5e-4),
+    #         optimizer=Adam(learning_rate=1e-3),
     #         loss={"speed": "mae", "dh": "mae"},
     #         loss_weights={"speed": 1.0, "dh": 10.0},
     #     )
 
     #     return self.model
-    
- 
+        
     def train_model(self, X, Y, test_size=0.2, random_state=42):
 
         # -----------------------------
@@ -134,12 +207,9 @@ class ModelTrainer:
         
         self.num_features = X_tr.shape[2]
         
-        self.x_scaler = StandardScaler()
-        self.y_scaler = StandardScaler()
+        self.x_scaler = StandardScaler() 
+        self.y_scaler = StandardScaler()  
         
-        # self.x_scaler = StandardScaler()
-        # self.y_scaler = MinMaxScaler()   
-             
         X_tr_2d = X_tr.reshape(-1, self.num_features)
         x_te_2d = X_te.reshape(-1, self.num_features)
         
