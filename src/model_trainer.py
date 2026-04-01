@@ -106,14 +106,11 @@ class ModelTrainer:
     def build_model(self):
         inputs = Input(shape=(self.window_size, self.num_features))
     
-        x = LSTM(128, return_sequences=True)(inputs)   
-        x = LSTM(128, return_sequences=False)(x)
+        x = LSTM(64, return_sequences=True)(inputs)   
+        x = LSTM(32, return_sequences=False)(x)
         
-        speed_branch = Dense(64, activation="relu")(x)
-        speed_out = Dense(1, name="speed")(speed_branch)
-
-        dh_branch = Dense(64, activation="relu")(x)
-        dh_out = Dense(1, name="dh")(dh_branch)
+        speed_out = Dense(1, name="speed")(x)
+        dh_out = Dense(1, name="dh")(x)
 
         self.model = tf.keras.Model(inputs, [speed_out, dh_out])
 
@@ -125,45 +122,42 @@ class ModelTrainer:
         )
         return self.model
     
+
     # def build_model(self):
     #     inputs = Input(shape=(self.window_size, self.num_features))
 
-    #     # ------------------------
-    #     # 1. LSTM feature extraction
-    #     # ------------------------
-    #     x = LSTM(128, return_sequences=True)(inputs)
-    #     x = LSTM(64, return_sequences=True)(x)   
 
-    #     # ------------------------
-    #     # 2. Multi-Head Attention
-    #     # ------------------------
+    #     x = LSTM(128, return_sequences=True)(inputs)
+    #     x = LayerNormalization()(x)
+        
+    #     x = LSTM(128, return_sequences=True)(x)   
+    #     x = LayerNormalization()(x)
+
+
     #     attn_out = MultiHeadAttention(
     #         num_heads=4,
     #         key_dim=32
     #     )(x, x)
 
-    #     # Residual + Norm (중요)
+
     #     x = Add()([x, attn_out])
     #     x = LayerNormalization()(x)
 
-    #     # ------------------------
-    #     # 3. Sequence → vector
-    #     # ------------------------
     #     x = GlobalAveragePooling1D()(x)
 
-    #     # ------------------------
-    #     # 4. Output
-    #     # ------------------------
-    #     # 4. Output branches
-    #     speed_out = Dense(1, name="speed")(x)
-    #     dh_out = Dense(1, name="dh")(x)
+    
+    #     speed_branch = Dense(64, activation="relu")(x)
+    #     speed_out = Dense(1, name="speed")(speed_branch)
+        
+    #     dh_branch = Dense(64, activation="relu")(x)
+    #     dh_out = Dense(1, name="dh")(dh_branch)
 
     #     self.model = Model(inputs, [speed_out, dh_out])
 
     #     self.model.compile(
-    #         optimizer=Adam(learning_rate=1e-3),
+    #         optimizer=Adam(learning_rate=5e-4),
     #         loss={"speed": "mae", "dh": "mae"},
-    #         loss_weights={"speed": 1.0, "dh": 10.0},
+    #         loss_weights={"speed": 1.0, "dh": 5.0},
     #     )
 
     #     return self.model
