@@ -6,7 +6,6 @@ from scipy.interpolate import PchipInterpolator
 import math
 import matplotlib.pyplot as plt
 from numpy.lib.stride_tricks import sliding_window_view
-
 from matplotlib.ticker import MultipleLocator
 
 
@@ -24,7 +23,7 @@ class DataProcessor:
         self.window_size = window_size
         
     def load_and_preprocess_csv(
-        file_path, skiprows=100, skipfooter=100, flag=False, zone=52, expected_total_deg=0, window_size=200
+        file_path, skiprows=100, skipfooter=100, flag=False, zone=52, window_size=200
     ):
         if flag:
             df = pd.read_csv(
@@ -73,7 +72,7 @@ class DataProcessor:
 
         e, n, df = DataProcessor.llh_to_enu(df, flag, zone)
         v_10hz, dh_10Hz = DataProcessor.interpol_vAndh(e, n)
-        dh_50Hz = DataProcessor.heading_ref(df, expected_total_deg)
+        dh_50Hz = DataProcessor.heading_ref(df)
         X, Y = DataProcessor.makeXY(df, v_10hz, dh_50Hz, window_size=window_size)
         
         return df, X, Y
@@ -241,7 +240,7 @@ class DataProcessor:
         return disp_10Hz, dh_1s_10Hz
     
     @staticmethod
-    def heading_ref(df, expected_total_deg):
+    def heading_ref(df):
         fs = 50.0
         dt = 1.0 / fs
         
@@ -311,30 +310,7 @@ class DataProcessor:
         gy_corr = gyro_corr[:, 1]
         gz_corr = gyro_corr[:, 2]
 
-        theta_z = np.cumsum(gz_corr) * dt
-
-        theta_z_deg = np.degrees(theta_z)
-        
-        # =========================
-        # 6. 90도 배수 기반 bias 보정
-        # =========================
-        # observed_total_deg = theta_z_deg[-1]
-        # #snapped_total_deg = 90.0 * np.round(observed_total_deg / 90.0)
-        # snapped_total_deg = expected_total_deg
-        # total_time = len(gz_corr) * dt
-        # bias_deg_per_sec = (observed_total_deg - snapped_total_deg) / total_time
-        # bias_rad_per_sec = np.radians(bias_deg_per_sec)
-
-        # # print(f"observed_total_deg = {observed_total_deg:.3f}")
-        # # print(f"snapped_total_deg  = {snapped_total_deg:.3f}")
-        # # print(f"estimated_bias     = {bias_deg_per_sec:.6f} deg/s")
-
-        # gz_corr = gz_corr - bias_rad_per_sec
-
-        # 보정 후 다시 적분
-        # theta_z = np.cumsum(gz_corr) * dt
-        # theta_z_deg = np.degrees(theta_z)
-        
+        theta_z = np.cumsum(gz_corr) * dt  
         dh_50hz = np.diff(theta_z)
         
         return dh_50hz
@@ -351,33 +327,21 @@ class DataProcessor:
             "Gyroscope y",
             "Gyroscope z",
             "Acc_Norm",
-            #"Gyro_Norm",
         ]
 
         values = df[sensor_cols].to_numpy()   # (N, num_features)
         N, num_features = values.shape
 
-        # -------------------------
-        # 1) X 만들기 (stride에 따라 분기)
-        # -------------------------
-        if stride == 1:
-            # sliding_window_view로 오버헤드 최소화
-            # 결과 shape: (N - window_size + 1, window_size, num_features)
-            windows = sliding_window_view(values, (window_size, num_features))
-            X = windows[:, 0, :, :]  # (N, window_size, F)
-        else:
-            # 기존 코드 그대로 (stride=5 등)
-            X_list = []
-            for i in range(0, N - window_size + 1, stride):
-                window = values[i : i + window_size]   # (window_size, num_features)
-                X_list.append(window)
-            X = np.stack(X_list, axis=0)           # (num_windows, window_size, num_features)
+        X_list = []
+        for i in range(0, N - window_size + 1, stride):
+            window = values[i : i + window_size]   # (window_size, num_features)
+            X_list.append(window)
+        X = np.stack(X_list, axis=0)           # (num_windows, window_size, num_features)
 
         Y_v = []
         Y_dh = []
 
-        offsets = [0, 10, 20, 30]  # 1초 간격 (10Hz 기준)
-        #offsets = [0, 50, 100, 150]
+        offsets = [0, 10, 20, 30] 
         for i in range(len(v_10Hz) - max(offsets)):
             # v: 1초 단위 4개를 합
             Y_v.append(
@@ -387,9 +351,6 @@ class DataProcessor:
                 + v_10Hz[i + offsets[3]]
             )
             
-        # -------------------------
-        # 3) Y_dh (🔥 핵심)
-        # -------------------------
         Y_dh = []
         for i in range(0, len(dh_50Hz) - window_size + 1, stride):
             dh_sum = np.sum(dh_50Hz[i : i + window_size])
@@ -413,8 +374,8 @@ class DataProcessor:
 
 
     @staticmethod
-    def load_and_preprocess_csv_test(file_path, skiprows=50):
-        df = pd.read_csv(file_path, skiprows=skiprows, skipfooter=50, engine="python")
+    def load_and_preprocess_csv_test(file_path, skiprows=50, skipfooter=50):
+        df = pd.read_csv(file_path, skiprows=skiprows, skipfooter=skipfooter, engine="python")
 
         df.columns = [
             "Time",
@@ -458,10 +419,8 @@ class DataProcessor:
         skipfooter=100,
         flag=True,
         zone=52,
-        expected_total_deg=0,
         window_size=200,
         time_tolerance="10ms",
-        heading_corr = False,
     ):
         # -----------------------------
         # 1. CSV 로드
@@ -578,17 +537,6 @@ class DataProcessor:
         }
         df_ref_small = df_ref_small.rename(columns=rename_dict)
 
-        # -----------------------------
-        # 5. Time 기준 가장 가까운 샘플끼리 merge
-        # -----------------------------
-        # df = pd.merge_asof(
-        #     df_sensor.sort_values("Time"),
-        #     df_ref_small.sort_values("Time"),
-        #     on="Time",
-        #     direction="nearest",
-        #     tolerance=pd.Timedelta(time_tolerance),
-        # )
-        
         df = pd.merge_asof(
         df_sensor.sort_values("Time"),
         df_ref_small.sort_values("ref_Time"),
@@ -671,21 +619,9 @@ class DataProcessor:
         N = len(heading_1hz)
         t = np.arange(N, dtype=float)
         t_new = np.linspace(0.0, N - 1, (N - 1) * 10 + 1)
-        #t_new = np.linspace(0.0, N - 1, (N - 1) * 50 + 1)
-
-        heading_unwrap = np.unwrap(heading_1hz)
 
         p_disp = PchipInterpolator(t, disp_1hz)
-        p_head = PchipInterpolator(t, heading_unwrap)
-
         disp_10Hz = p_disp(t_new)
-        head_10Hz = p_head(t_new)
-        # dh_10Hz = np.diff(head_10Hz)
-        # dh_1s_10Hz = np.convolve(dh_10Hz, np.ones(10), mode="valid")
-
-        # disp_10Hz = disp_10Hz[1:]
-        # head_10Hz = head_10Hz[1:]
-
         v_10Hz = disp_10Hz.copy()
 
         fs = 50.0
@@ -741,26 +677,8 @@ class DataProcessor:
         gz_corr = gyro_corr[:, 2]
 
         theta_z = np.cumsum(gz_corr) * dt
-        theta_z_deg = np.degrees(theta_z)
-        
-        if heading_corr:
-            observed_total_deg = theta_z_deg[-1]
-            # #snapped_total_deg = 90.0 * np.round(observed_total_deg / 90.0)
-            # snapped_total_deg = expected_total_deg
-            # total_time = len(gz_corr) * dt
-            # bias_deg_per_sec = (observed_total_deg - snapped_total_deg) / total_time
-            # bias_rad_per_sec = np.radians(bias_deg_per_sec)
-
-
-            # gz_corr = gz_corr - bias_rad_per_sec
-
-            # # 보정 후 다시 적분
-            # theta_z = np.cumsum(gz_corr) * dt
-            # theta_z_deg = np.degrees(theta_z)
         dh_50Hz = np.diff(theta_z)
         
-        
-
         stride = 5
         sensor_cols = [
             "Accelerometer x",
@@ -770,25 +688,20 @@ class DataProcessor:
             "Gyroscope y",
             "Gyroscope z",
             "Acc_Norm",
-            #"Gyro_Norm",
         ]
 
         values = df[sensor_cols].to_numpy()
         N, num_features = values.shape
 
-        if stride == 1:
-            windows = sliding_window_view(values, (window_size, num_features))
-            X = windows[:, 0, :, :]
-        else:
-            X_list = []
-            for i in range(0, N - window_size + 1, stride):
-                X_list.append(values[i:i + window_size])
-            X = np.stack(X_list, axis=0)
-
+        X_list = []
         Y_v = []
-        offsets = [0, 10, 20, 30]
-        #offsets = [0, 50, 100, 150]
+        Y_dh = []
+        
+        for i in range(0, N - window_size + 1, stride):
+            X_list.append(values[i:i + window_size])
+        X = np.stack(X_list, axis=0)
 
+        offsets = [0, 10, 20, 30]
         for i in range(len(v_10Hz) - max(offsets)):
             Y_v.append(
                 v_10Hz[i + offsets[0]]
@@ -797,7 +710,6 @@ class DataProcessor:
                 + v_10Hz[i + offsets[3]]
             )
 
-        Y_dh = []
         for i in range(0, len(dh_50Hz) - window_size + 1, stride):
             dh_sum = np.sum(dh_50Hz[i:i + window_size])
             if np.abs(np.degrees(dh_sum)) < 3.0:
@@ -810,40 +722,6 @@ class DataProcessor:
         Y_dh = Y_dh[:min_len]
 
         Y = np.stack([Y_v, Y_dh], axis=1)
-        
-        # window_size = 200
-
-        y_e = []
-        y_n = []
-        dx = 0.0
-        dy = 0.0
-        heading = 0
-
-        #stride = 1
-
-        for v, h in zip(Y[:, 0], Y[:, 1]):
-            heading += h * (stride / window_size)
-            dx += (v * (stride / window_size)) * np.cos(heading)
-            dy += (v * (stride / window_size)) * np.sin(heading)
-            y_e.append(dx)
-            y_n.append(dy)
-
-        plt.plot(e_corr, n_corr, ".-", label="Y_true")
-        plt.plot(y_e, y_n, ".-", label="Y_label", alpha=0.8)
-        plt.xlabel("E (m)")
-        plt.ylabel("N (m)")
-        plt.legend()
-        plt.grid()
-        plt.axis("equal")
-        plt.show()
-
-        plt.plot(
-            np.cumsum(np.degrees(Y[:, 1])) * (stride / window_size), label="Y_dh"
-        )
-        plt.gca().yaxis.set_major_locator(MultipleLocator(90))
-        plt.grid()
-        plt.legend()
-        plt.show()
         
         return df, X, Y
     
