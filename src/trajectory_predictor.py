@@ -23,7 +23,7 @@ class TrajectoryPredictor:
             'Gyroscope x','Gyroscope y','Gyroscope z',
             'Acc_Norm', #'Gyro_Norm'
         ]
-
+        
         arr = df[cols].values.astype(np.float32)
 
         M = len(arr)
@@ -151,15 +151,6 @@ class TrajectoryPredictor:
         plt.legend()
         plt.show()
         
-        # === 시작점-종료점 거리 계산 및 출력 추가 ===
-        start_x, start_y = traj_x[0], traj_y[0]
-        end_x, end_y = traj_x[-1], traj_y[-1]
-        dist = np.hypot(end_x - start_x, end_y - start_y)
-        #print(f"Start-End distance: {dist:.3f} m")
-
-
-        #print(f"Heading Error (deg): {np.abs(np.degrees(arr_heading[-1])) - 1080:.3f} deg")
-        heading_error = np.abs(np.degrees(arr_heading[-1])) - 1080
         plt.plot(np.degrees(arr_heading), 'r-', label='Heading (deg)')
         plt.title('Cumulative Heading Change')
         plt.xlabel('Time (s)')
@@ -173,119 +164,70 @@ class TrajectoryPredictor:
         ))
         plt.show()
         
-
-        #주석을 해제하면 애니메이션 저장
-        #animate_trajectory(plot_x, plot_y, save_path='predicted_trajectory.mp4', interval_ms=100, title=title)
-
-        # return dist, heading_error
-        return traj_x, traj_y
-
-    def compare_trajectories(self, df: pd.DataFrame, plag_1Hz: bool = False):
+        return plot_x, plot_y
+    
+    def analyze_pdr_performance(self,gt_df, pred_x, pred_y, title="PDR Performance Analysis"):
         """
-        1) df와 Y를 입력받아서, model.predict 결과와 GT(Y)를 비교
-           - df: load_and_preprocess_csv로 얻은 DataFrame (50Hz 샘플링)
-           - Y : shape=(n_windows, 2) 형태의 GT 값 ([speed_1, heading_1])이지만,
-                 실제로 여기서는 df에 있는 컬럼 'speed_1', 'heading_1'을 사용하므로
-                 길이가 50Hz(샘플 수) 만큼 존재한다 가정
-        2) plag_1Hz=False → stride=5, plag_1Hz=True → stride=50 로 윈도우 생성
-        3) pred_speed, pred_hc 예측 → 스케일 복원
-        4) GT 속도·헤딩 vs 예측 속도·헤딩 비교 (길이 맞춤)
-        5) GT Trajectory vs Pred Trajectory 비교
+        GT 데이터와 예측 데이터를 비교하여 Plot을 그리고 정량적 지표(RMSE, MAE)를 산출합니다.
+        gt_df: 이전에 생성한 gt_synced_stride20_*.csv 기반 DataFrame (N, 2)
+        pred_x, pred_y: 모델 함수에서 리턴받은 예측 궤적 (N, 2)
         """
+        # 1. 길이 동기화 확인 (예측치가 1개 더 많을 수 있으므로 슬라이싱)
+        min_len = min(len(gt_df), len(pred_x))
+        gt_coords = gt_df[['GT_X', 'GT_Y']].values[:min_len]
+        pred_coords = np.column_stack((pred_x[:min_len], pred_y[:min_len]))
 
-        # ===== 1) stride 결정 및 윈도우 시작 인덱스 목록 생성 =====
-        stride = self.window_size if plag_1Hz else self.window_size // 10
-        window_size = self.window_size
-
-        # ===== 2) 윈도우 단위 예측 =====
-        X = self._prepare_windows(df, stride)   # (num_windows, window_size, num_features)
-        Y_pred_scaled = self.model.predict(X)           # (num_windows, 2)
-
-        # 스케일 복원
-        pred_speed = self.y_speed_scaler.inverse_transform(
-            Y_pred_scaled[:, 0].reshape(-1, 1)
-        ).ravel()
-        pred_hc = self.y_hc_scaler.inverse_transform(
-            Y_pred_scaled[:, 1].reshape(-1, 1)
-        ).ravel()
-
-        if not plag_1Hz:
-            pred_speed = pred_speed * (stride/window_size)
-            pred_hc    = pred_hc * (stride/window_size) 
-            
-        plt.plot(np.degrees(pred_hc), '.-')
-        plt.show()
+        # 2. 정량적 지표 계산
+        errors = np.sqrt(np.sum((gt_coords - pred_coords)**2, axis=1))
+        rmse = np.sqrt(np.mean(errors**2))
+        mae = np.mean(errors)
+        max_error = np.max(errors)
         
+        # 시작점-종료점 거리 오차 (Return Position Error)
+        rpe_gt = np.hypot(gt_coords[-1, 0] - gt_coords[0, 0], gt_coords[-1, 1] - gt_coords[0, 1])
+        rpe_pred = np.hypot(pred_coords[-1, 0] - pred_coords[0, 0], pred_coords[-1, 1] - pred_coords[0, 1])
+        loop_closure_error = np.hypot(pred_coords[-1, 0] - gt_coords[-1, 0], pred_coords[-1, 1] - gt_coords[-1, 1])
+
+        # 3. 결과 출력
+        print(f"\n===== {title} Statistics =====")
+        print(f"RMSE: {rmse:.4f} m")
+        print(f"MAE: {mae:.4f} m")
+        print(f"Max Error: {max_error:.4f} m")
+        print(f"Final Point Error (Loop Closure): {loop_closure_error:.4f} m")
+        print("==========================================\n")
+
+        # 4. Trajectory 비교 Plot
+        plt.figure(figsize=(10, 10))
+        plt.plot(gt_coords[:, 0], gt_coords[:, 1], 'k--', label='Ground Truth (DCM)', alpha=0.8)
+        plt.plot(pred_coords[:, 0], pred_coords[:, 1], 'b-o', label='AI-PDR Prediction', markersize=3, alpha=0.7)
         
-        M = len(df)                     # 예: 50Hz 데이터 개수
-        n_windows_Hz1 = M // 50         # 초당 1개 대표 좌표 개수
-
-        df_ori_e = []
-        df_ori_n = []
-        for i in range(n_windows_Hz1):
-            center_idx = i * 50 + 25    # 가운데 인덱스 (0~49 → 25, 50~99 → 75, ...)
-            if center_idx < M:
-                df_ori_e.append(df['E'].iloc[center_idx])
-                df_ori_n.append(df['N'].iloc[center_idx])
-            else:
-                # 만약 마지막 윈도우가 50미만 남았으면 마지막 샘플 사용
-                df_ori_e.append(df['E'].iloc[-1])
-                df_ori_n.append(df['N'].iloc[-1])
-
-        # N: 1Hz 대표 좌표 개수
-        N = len(df_ori_e)
+        plt.scatter(gt_coords[0, 0], gt_coords[0, 1], c='green', s=100, label='Start', zorder=5)
+        plt.scatter(gt_coords[-1, 0], gt_coords[-1, 1], c='red', marker='x', s=100, label='GT End', zorder=5)
+        plt.scatter(pred_coords[-1, 0], pred_coords[-1, 1], c='magenta', s=100, label='Predict End', zorder=5)
         
-        
-        E = df_ori_e
-        N = df_ori_n
-        dx = E[1] - E[0]
-        dy = N[1] - N[0]
-        
-        theta = math.atan2(dy, dx)
-        cos_a = math.cos(-theta)
-        sin_a = math.sin(-theta)
-        R = np.array([[cos_a, -sin_a],
-                    [sin_a,  cos_a]])
-
-        # 4) 원점(초기점)을 빼서 상대좌표로 만든 뒤 회전
-        coords = np.vstack((
-            E - E[0],    # East 방향 상대좌표
-            N - N[0]     # North 방향 상대좌표
-        ))
-        rotated = R @ coords
-
-        e_corr = rotated[0, :]
-        n_corr = rotated[1, :]
-
-
-        # -------------------------------
-        # 7) Pred Trajectory 누적 적분
-        # -------------------------------
-        hd_pr = 0.0
-        x_pr = 0.0
-        y_pr = 0.0
-        tx_pr, ty_pr = [x_pr], [y_pr]
-        for s, dh in zip(pred_speed, pred_hc):
-            hd_pr += dh 
-            x_pr += s * np.cos(hd_pr)
-            y_pr += s * np.sin(hd_pr)
-            tx_pr.append(x_pr)
-            ty_pr.append(y_pr)
-
-        # -------------------------------
-        # 8) GT vs Pred Trajectory 비교 플롯
-        # -------------------------------
-        plt.figure(figsize=(10, 8))
-        plt.plot(e_corr,        n_corr,   'b-', label='GT Trajectory',   linewidth=2)
-        plt.plot(tx_pr,        ty_pr,   'r-', label='Pred Trajectory', linewidth=2)
-        plt.scatter([0], [0], c='green', s=100, label='Start')
-        plt.title(f'GT vs Predicted Trajectory (stride={stride})')
-        plt.xlabel('Easting (m)')
-        plt.ylabel('Northing (m)')
-        plt.legend()
-        plt.grid()
+        plt.title(f"{title}\nRMSE: {rmse:.3f}m, MAE: {mae:.3f}m")
+        plt.xlabel('East (m)')
+        plt.ylabel('North (m)')
         plt.axis('equal')
+        plt.grid(True, linestyle=':', alpha=0.6)
+        plt.legend()
         plt.show()
+
+        # 5. Error Distribution (CDF) Plot - IEEE 저널 필수 항목
+        sorted_errors = np.sort(errors)
+        cdf = np.arange(len(sorted_errors)) / float(len(sorted_errors))
+        
+        plt.figure(figsize=(8, 5))
+        plt.plot(sorted_errors, cdf, linewidth=2, color='red')
+        plt.title('Cumulative Distribution Function of Error')
+        plt.xlabel('Error (meters)')
+        plt.ylabel('Probability')
+        plt.grid(True)
+        plt.show()
+
+        return rmse, mae
+
+ 
 
 
 
