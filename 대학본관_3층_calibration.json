@@ -1,0 +1,33 @@
+{
+    "image_path": "대학본관_3층.png",
+    "known_length_m": 9.0,
+    "scale_line_px": {
+        "p1": [
+            4607.0,
+            633.0
+        ],
+        "p2": [
+            5750.0,
+            635.0
+        ],
+        "length_px": 1143.001749779938
+    },
+    "m_per_px": 0.007874003693986267,
+    "px_per_m": 127.00019441999314,
+    "origin_px": [
+        5191.0,
+        2340.0
+    ],
+    "xdir_px": [
+        5724.0,
+        2340.0
+    ],
+    "theta_rad": 0.0,
+    "theta_deg": 0.0,
+    "enu_y_axis": true,
+    "coordinate_rule": {
+        "origin": "user selected origin point",
+        "positive_x": "direction from origin point to xdir point",
+        "positive_y": "left-handed image y is converted to ENU-style +Y when enu_y_axis=True"
+    }
+}

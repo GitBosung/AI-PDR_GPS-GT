@@ -23,7 +23,7 @@ class DataProcessor:
         self.window_size = window_size
         
     def load_and_preprocess_csv(
-        file_path, skiprows=100, skipfooter=100, flag=False, zone=52, window_size=200
+        file_path, skiprows=100, skipfooter=100, flag=False, zone=52, window_size=200, expected_total_deg=0
     ):
         if flag:
             df = pd.read_csv(
@@ -421,6 +421,7 @@ class DataProcessor:
         zone=52,
         window_size=200,
         time_tolerance="10ms",
+        expected_total_deg = 0
     ):
         # -----------------------------
         # 1. CSV 로드
@@ -722,6 +723,92 @@ class DataProcessor:
         Y_dh = Y_dh[:min_len]
 
         Y = np.stack([Y_v, Y_dh], axis=1)
+        
+        x = 0.0
+        y = 0.0
+        current_heading = 0.0
+
+        path_x = [x]
+        path_y = [y]
+        
+        for i in range(len(Y)):
+            d = Y[i, 0] * (5/200)
+            dh = Y[i, 1] * (5/200)
+            current_heading += dh
+
+            dx = (d* np.cos(current_heading))
+            dy = (d* np.sin(current_heading))
+
+            x += dx
+            y += dy
+
+            path_x.append(x)
+            path_y.append(y)
+
+
+        # NumPy array 변환
+        path_x = np.asarray(path_x)
+        path_y = np.asarray(path_y)
+
+        # =============================================================================
+        # 경로 Plot
+        # =============================================================================
+
+        plt.figure(
+            figsize=(8, 8)
+        )
+
+        plt.plot(
+            path_x,
+            path_y,
+            '.-',
+            linewidth=2,
+        )
+
+        # 시작점
+        plt.scatter(
+            path_x[0],
+            path_y[0],
+            s=100,
+            label="Start",
+        )
+
+        # 종료점
+        plt.scatter(
+            path_x[-1],
+            path_y[-1],
+            s=100,
+            marker="x",
+            label="End",
+        )
+
+
+        plt.xlabel(
+            "East [m]"
+        )
+
+        plt.ylabel(
+            "North [m]"
+        )
+
+        plt.title(
+            "Path reconstructed from Distance + Heading Change GT"
+        )
+
+        plt.axis(
+            "equal"
+        )
+
+        plt.grid(
+            True,
+            alpha=0.3,
+        )
+
+        plt.legend()
+
+        plt.tight_layout()
+
+        plt.show()
         
         return df, X, Y
     
